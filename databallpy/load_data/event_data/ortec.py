@@ -10,6 +10,8 @@ from databallpy.utils.tz_modification import utc_to_local_datetime
 from databallpy.utils.utils import MISSING_INT
 from databallpy.warnings import DataBallPyWarning
 
+import json
+
 
 def load_ortec_event_data(
     event_data_loc: str, metadata_loc: str
@@ -20,24 +22,83 @@ def load_ortec_event_data(
         event_data_loc (str): location of the event data
         metadata_loc (str): location of the metadata
 
-    Note: event data of Ortec is not yet supported since ortec event
-    data uses identifiers which are unknown to us. Therefore, we cannot
-    parse the event data. For now, None is returned as event data.
-
     Returns:
         Tuple[pd.DataFrame, Metadata]: event data and metadata of the match
     """
-    metadata = load_metadata(metadata_loc)
+    if not isinstance(event_data_loc, str):
+        raise TypeError("event_data_loc should be a string")
+    if not isinstance(metadata_loc, str):
+        raise TypeError("metadata_loc should be a string")
+    if not event_data_loc.endswith(".json"):
+        raise ValueError("event_data_loc should be a .json file")
 
-    if event_data_loc is not None:
-        warnings.warn(
-            "Ortec event data is not yet supported, returning None",
-            DataBallPyWarning,
-        )
-    return None, metadata
+    metadata = _load_metadata(metadata_loc)
+    metadata, possessions = _update_metadata(metadata, event_data_loc)
+    event_data = _load_ortec_event_data(event_data_loc=event_data_loc)
+    return event_data, metadata, databallpy_events
+
+def _update_metadata(metadata: Metadata, event_data_loc: str) -> Tuple[Metadata, pd.DataFrame]:
+    """Function that updates the metadata with the event data. The function 
+    updates the player information and the score of the match. It also obtains
+    the possession information to enrich potential tracking data.
+
+    Args:
+        metadata (Metadata): metadata of the match
+        event_data_loc (str): location of the event data
+
+    Returns:
+        Tuple[Metadata, pd.DataFrame]: updated metadata and possession information
+    """
+    with open(event_data_loc, "r") as f:
+        data = json.load(f)
+
+     # first update the player information in the metadata
+    for player_dict in data["LineUp"]:
+        players_df = metadata.home_players if player_dict["Person"] in metadata.home_players["id"].to_list() else metadata.away_players
+        shirt_num = player_dict["ShirtNumber"]
+        if shirt_num in players_df.shirt_num.values:
+            players_df.loc[players_df.shirt_num == shirt_num, "minutes_played"] = player_dict["MinutesPlayed"]
+
+    metadata.home_score = data["HomeScore"]
+    metadata.away_score = data["AwayScore"]
+
+    # optain possession information
+    temp_possessions = pd.DataFrame(data["PossessionMoments"])
+    possessions_df = pd.DataFrame(index=range(len(temp_possessions)))
+    possessions_df["start"] = temp_possessions["StartTime"] * 0.002
+    possessions_df["end"] = temp_possessions["EndTime"] * 0.002
+    possessions_df["team"] = temp_possessions["SelectionInPossession"].map({metadata.home_team_id: "home", metadata.away_team_id: "away"})
+
+    return metadata, possessions_df
+
+def _load_ortec_event_data(event_data_loc: str) -> pd.DataFrame:
+    with open(event_data_loc, "r") as f:
+        data = json.load(f)
+    
+    result_dict = {
+        "event_id": [],
+        "type_id": [],
+        "databallpy_event": [],
+        "period_id": [],
+        "minutes": [],
+        "seconds": [],
+        "player_id": [],
+        "team_id": [],
+        "outcome": [],
+        "start_x": [],
+        "start_y": [],
+        "datetime": [],
+        "ortec_event": [],
+    }
+    for event in data["Events"]:
+
+    
+   
+
+        import pdb; pdb.set_trace()
 
 
-def get_player_info(info_players: list) -> pd.DataFrame:
+def _get_player_info(info_players: list) -> pd.DataFrame:
     """Function that gets the information of the players
 
     Args:
@@ -71,7 +132,7 @@ def get_player_info(info_players: list) -> pd.DataFrame:
     )
 
 
-def load_metadata(metadata_loc: str) -> pd.DataFrame:
+def _load_metadata(metadata_loc: str) -> pd.DataFrame:
     """Function that loads metadata from .json file
 
     Args:
@@ -99,8 +160,8 @@ def load_metadata(metadata_loc: str) -> pd.DataFrame:
 
     info_home_players = metadata_json["HomeTeam"]["Persons"]
     info_away_players = metadata_json["AwayTeam"]["Persons"]
-    home_players = get_player_info(info_home_players)
-    away_players = get_player_info(info_away_players)
+    home_players = _get_player_info(info_home_players)
+    away_players = _get_player_info(info_away_players)
 
     home_formation = _get_formation(home_players)
     away_formation = _get_formation(away_players)

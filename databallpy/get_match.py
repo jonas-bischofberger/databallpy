@@ -92,13 +92,13 @@ def get_match(
         uses_event_metadata = True
 
     # temporary, in the case of ortec, we only have metadata
-    if event_metadata_loc and event_data_provider == "ortec":
-        _, event_metadata = load_ortec_event_data(
-            event_data_loc=None, metadata_loc=event_metadata_loc
-        )
-        event_data = pd.DataFrame()
-        databallpy_events = {}
-        uses_event_metadata = True
+    # if event_metadata_loc and event_data_provider == "ortec":
+    #     _, event_metadata = load_ortec_event_data(
+    #         event_data_loc=None, metadata_loc=event_metadata_loc
+    #     )
+    #     event_data = pd.DataFrame()
+    #     databallpy_events = {}
+    #     uses_event_metadata = True
 
     # load extra event data if needed
     if (
@@ -307,6 +307,7 @@ def load_event_data(
         "opta",
         "metrica",
         "instat",
+        "ortec",
     ], f"We do not support '{event_data_provider}' as event data provider yet, "
     "please open an issue in our Github repository."
 
@@ -322,6 +323,10 @@ def load_event_data(
         )
     elif event_data_provider == "instat":
         event_data, event_metadata = load_instat_event_data(
+            event_data_loc=event_data_loc, metadata_loc=event_metadata_loc
+        )
+    elif event_data_provider == "ortec":
+        event_data, event_metadata, databallpy_events = load_ortec_event_data(
             event_data_loc=event_data_loc, metadata_loc=event_metadata_loc
         )
 
