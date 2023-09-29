@@ -5,8 +5,8 @@ import pandas as pd
 
 from databallpy.load_data.event_data.ortec import (
     _get_formation,
-    get_player_info,
-    load_metadata,
+    _get_player_info,
+    _load_metadata,
     load_ortec_event_data,
 )
 from databallpy.load_data.metadata import Metadata
@@ -96,7 +96,7 @@ class TestOrtec(unittest.TestCase):
             )
 
     def test_load_metadata(self):
-        result = load_metadata(self.meta_data_loc)
+        result = _load_metadata(self.meta_data_loc)
         assert result == self.expected_metadata
 
     def test_get_player_info(self):
@@ -124,7 +124,7 @@ class TestOrtec(unittest.TestCase):
             }
         )
 
-        output = get_player_info(input)
+        output = _get_player_info(input)
         pd.testing.assert_frame_equal(output, expected_output)
 
     def test_get_formation(self):
