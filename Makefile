@@ -1,6 +1,6 @@
 LINT_FILES = tests/ databallpy/
 TEST_PATH = tests/
-PYTEST = poetry run pytest $(TEST_PATH) --pythonwarnings=once 
+PYTEST = poetry run python -m pytest $(TEST_PATH) --pythonwarnings=once 
 PYTEST_ARGS_COV = --cov-report=term-missing --cov-report=xml --cov=databallpy --cov-config=.coveragerc
 
 define echotask
@@ -46,4 +46,4 @@ test:
 	$(PYTEST) $(PYTEST_ARGS_COV)
 
 documentation: 
-	poetry run make html --directory docs/
+	poetry run jupyter-book build docs/ --all -W

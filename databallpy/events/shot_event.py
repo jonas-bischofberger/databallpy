@@ -1,20 +1,21 @@
+import json
 import math
 import os
 from dataclasses import dataclass
 
-import joblib
 import numpy as np
 import pandas as pd
 from scipy.spatial import Delaunay
 
-from databallpy.events.base_event import BaseEvent
+from databallpy.events.base_event import BaseOnBallEvent
 from databallpy.features.angle import get_smallest_angle
 from databallpy.features.pressure import get_pressure_on_player
-from databallpy.utils.utils import MISSING_INT
+from databallpy.models.utils import scale_and_predict_logreg
+from databallpy.utils.constants import MISSING_INT
 
 
 @dataclass
-class ShotEvent(BaseEvent):
+class ShotEvent(BaseOnBallEvent):
     """Class for shot events, inherits from BaseEvent. Saves all information from a
     shot from the event data, and adds information about the shot using the tracking
     data if available.
@@ -27,10 +28,12 @@ class ShotEvent(BaseEvent):
         datetime (pd.Timestamp): datetime at which the event occured
         start_x (float): x location of the event
         start_y (float): y location of the event
+        pitch_size (list): dimensions of the pitch
+        team_side (str): side of the team that takes the shot, either "home" or "away"
         team_id (int): id of the team that takes the shot
         player_id (int): id of the player who takes the shot
         shot_outcome (str): whether the shot is a goal or not on target or not.
-            Possible values: "goal", "own_goal", "miss_off_target", "miss_on_target",
+            Possible values: "goal", "miss_off_target", "miss_on_target",
             "blocked", "miss_hit_post" "miss"
         y_target (float, optional): y location of the goal. Defaults to np.nan.
         z_target (float, optional): z location of the goal. Defaults to np.nan.
@@ -63,7 +66,20 @@ class ShotEvent(BaseEvent):
             the triangle from the ball and the two posts of the goal.
         goal_gk_distance (float, optional): distance between the goal and the
             goalkeeper in meters.
+        set_piece (str, optional): type of set piece. Defaults to "no_set_piece".
+            Choices: "no_set_piece", "free_kick", "penalty"
 
+    Attributes:
+        xG (float): expected goals of the shot. This is calculated using a model that is
+            trained on the distance and angle to the goal, and the distance times the
+            angle to the goal. See the notebook in the notebooks folder for more
+            information on the model.
+        xT (float): expected threat of the event. This is calculated using a model that
+            is trained on the distance and angle to the goal, and the distance times
+            the angle to the goal. See the notebook in the notebooks folder for more
+            information on the model.
+        df_attributes (list[str]): list of attributes that are used to create a
+            DataFrame.
 
     Returns:
         ShotEvent: instance of the ShotEvent class
@@ -81,6 +97,7 @@ class ShotEvent(BaseEvent):
     type_of_play: str = "regular_play"
     first_touch: bool = False
     created_oppertunity: str = None
+
     # id of the event that led to the shot. Note: opta id for opta event data
     related_event_id: int = MISSING_INT
 
@@ -94,16 +111,98 @@ class ShotEvent(BaseEvent):
     n_obstructive_defenders: int = MISSING_INT
     goal_gk_distance: float = np.nan
     xG: float = np.nan
+    set_piece: str = "no_set_piece"
 
     def __post_init__(self):
         super().__post_init__()
         self._check_datatypes()
+        if self.type_of_play in ["penalty", "free_kick"]:
+            self.set_piece = self.type_of_play
+        _ = self._xt
+        if pd.isnull(self.ball_goal_distance):
+            self._update_ball_goal_distance()
+        if pd.isnull(self.shot_angle):
+            self._update_shot_angle()
+        self.xG = float(self.get_xG())
+
+    @property
+    def df_attributes(self) -> list[str]:
+        base_attributes = super().base_df_attributes
+        return base_attributes + [
+            "player_id",
+            "shot_outcome",
+            "y_target",
+            "z_target",
+            "body_part",
+            "type_of_play",
+            "first_touch",
+            "created_oppertunity",
+            "related_event_id",
+            "ball_goal_distance",
+            "ball_gk_distance",
+            "shot_angle",
+            "gk_optimal_loc_distance",
+            "pressure_on_ball",
+            "n_obstructive_players",
+            "n_obstructive_defenders",
+            "goal_gk_distance",
+            "xG",
+            "set_piece",
+        ]
+
+    def _update_ball_goal_distance(self, ball_xy: np.ndarray | None = None):
+        """Function to update the ball goal distance. Uses ball_xy input
+        if provided, else uses the start_x and start_y of the event data.
+
+        Args:
+            ball_xy (np.ndarray | None, optional): The start location of the event.
+                Defaults to None.
+        """
+        goal_xy = (
+            [self.pitch_size[0] / 2.0, 0]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, 0]
+        )
+
+        if ball_xy is None:
+            # use event data
+            ball_xy = np.array([self.start_x, self.start_y])
+        self.ball_goal_distance = math.dist(ball_xy, goal_xy)
+
+    def _update_shot_angle(self, ball_xy: np.ndarray | None = None):
+        """Function to update the shot angle. Uses ball_xy input
+        if provided, else uses the start_x and start_y of the event data.
+
+        Args:
+            ball_xy (np.ndarray | None, optional): The start location of the event.
+                Defaults to None.
+        """
+
+        left_post_xy = (
+            [self.pitch_size[0] / 2.0, (7.32 / 2)]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, -(7.32 / 2)]
+        )
+        right_post_xy = (
+            [self.pitch_size[0] / 2.0, -(7.32 / 2)]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, (7.32 / 2)]
+        )
+
+        if ball_xy is None:
+            # use event data
+            ball_xy = np.array([self.start_x, self.start_y])
+        # define vectors
+        ball_left_post_vector = np.array(left_post_xy) - np.array(ball_xy)
+        ball_right_post_vector = np.array(right_post_xy) - np.array(ball_xy)
+
+        self.shot_angle = get_smallest_angle(
+            ball_left_post_vector, ball_right_post_vector, angle_format="degree"
+        )
 
     def add_tracking_data_features(
         self,
         tracking_data_frame: pd.Series,
-        team_side: str,
-        pitch_dimensions: list,
         column_id: str,
         gk_column_id: str,
     ):
@@ -124,26 +223,22 @@ class ShotEvent(BaseEvent):
         """
         # define positions
         goal_xy = (
-            [pitch_dimensions[0] / 2.0, 0]
-            if team_side == "home"
-            else [-pitch_dimensions[0] / 2.0, 0]
+            [self.pitch_size[0] / 2.0, 0]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, 0]
         )
         left_post_xy = (
-            [pitch_dimensions[0] / 2.0, (7.32 / 2)]
-            if team_side == "home"
-            else [-pitch_dimensions[0] / 2.0, -(7.32 / 2)]
+            [self.pitch_size[0] / 2.0, (7.32 / 2)]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, -(7.32 / 2)]
         )
         right_post_xy = (
-            [pitch_dimensions[0] / 2.0, -(7.32 / 2)]
-            if team_side == "home"
-            else [-pitch_dimensions[0] / 2.0, (7.32 / 2)]
+            [self.pitch_size[0] / 2.0, -(7.32 / 2)]
+            if self.team_side == "home"
+            else [-self.pitch_size[0] / 2.0, (7.32 / 2)]
         )
         ball_xy = tracking_data_frame[["ball_x", "ball_y"]].values
         gk_xy = tracking_data_frame[[f"{gk_column_id}_x", f"{gk_column_id}_y"]].values
-
-        # define vectors
-        ball_left_post_vector = np.array(left_post_xy) - np.array(ball_xy)
-        ball_right_post_vector = np.array(right_post_xy) - np.array(ball_xy)
 
         # calculate obstructive players
         triangle = Delaunay([right_post_xy, left_post_xy, ball_xy])
@@ -157,18 +252,16 @@ class ShotEvent(BaseEvent):
         players_xy = np.array([x_vals, y_vals]).T
         n_obstructive_players = (triangle.find_simplex(players_xy) >= 0).sum()
 
-        opponent_column_ids = [x for x in players_column_ids if team_side not in x]
+        opponent_column_ids = [x for x in players_column_ids if self.team_side not in x]
         x_vals = tracking_data_frame[[f"{x}_x" for x in opponent_column_ids]].values
         y_vals = tracking_data_frame[[f"{x}_y" for x in opponent_column_ids]].values
         opponent_xy = np.array([x_vals, y_vals]).T
         n_obstructive_defenders = (triangle.find_simplex(opponent_xy) >= 0).sum()
 
         # add variables
-        self.ball_goal_distance = math.dist(ball_xy, goal_xy)
+        self._update_ball_goal_distance(ball_xy)
         self.ball_gk_distance = math.dist(ball_xy, gk_xy)
-        self.shot_angle = get_smallest_angle(
-            ball_left_post_vector, ball_right_post_vector, angle_format="degree"
-        )
+        self._update_shot_angle(ball_xy)
         self.gk_optimal_loc_distance = float(
             np.linalg.norm(np.cross(goal_xy - ball_xy, ball_xy - gk_xy))
             / np.linalg.norm(goal_xy - ball_xy)
@@ -177,7 +270,7 @@ class ShotEvent(BaseEvent):
             get_pressure_on_player(
                 tracking_data_frame,
                 column_id,
-                pitch_size=pitch_dimensions,
+                pitch_size=self.pitch_size,
                 d_front="variable",
                 d_back=3.0,
                 q=1.75,
@@ -199,13 +292,18 @@ class ShotEvent(BaseEvent):
         if pd.isnull(self.ball_goal_distance) or pd.isnull(self.shot_angle):
             return np.nan
 
+        with open(f"{path}/xg_params.json", "r") as f:
+            xg_params = json.load(f)
+
         if self.type_of_play == "penalty":
             return 0.79
+
         elif self.type_of_play == "free_kick":
-            pipeline = joblib.load(f"{path}/xG_free_kick_pipeline.pkl")
-            return pipeline.predict_proba(
-                np.array([[self.ball_goal_distance, self.shot_angle]])
-            )[0, 1]
+            return scale_and_predict_logreg(
+                np.array([[self.ball_goal_distance, self.shot_angle]]),
+                xg_params["xG_by_free_kick"],
+            )[0]
+
         elif (
             self.type_of_play
             in [
@@ -216,15 +314,16 @@ class ShotEvent(BaseEvent):
             ]
             and "foot" not in self.body_part
         ):
-            pipeline = joblib.load(f"{path}/xG_by_head_pipeline.pkl")
-            return pipeline.predict_proba(
-                np.array([[self.ball_goal_distance, self.shot_angle]])
-            )[0, 1]
+            return scale_and_predict_logreg(
+                np.array([[self.ball_goal_distance, self.shot_angle]]),
+                xg_params["xG_by_head"],
+            )[0]
+
         else:  # take most general model, shot by foot
-            pipeline = joblib.load(f"{path}/xG_by_foot_pipeline.pkl")
-            return pipeline.predict_proba(
-                np.array([[self.ball_goal_distance, self.shot_angle]])
-            )[0, 1]
+            return scale_and_predict_logreg(
+                np.array([[self.ball_goal_distance, self.shot_angle]]),
+                xg_params["xG_by_foot"],
+            )[0]
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ShotEvent):
@@ -255,10 +354,12 @@ class ShotEvent(BaseEvent):
             self.ball_gk_distance == other.ball_gk_distance
             if not pd.isnull(self.ball_gk_distance)
             else pd.isnull(other.ball_gk_distance),
-            self.ball_goal_distance == other.ball_goal_distance
+            math.isclose(
+                self.ball_goal_distance, other.ball_goal_distance, abs_tol=1e-5
+            )
             if not pd.isnull(self.ball_goal_distance)
             else pd.isnull(other.ball_goal_distance),
-            self.shot_angle == other.shot_angle
+            math.isclose(self.shot_angle, other.shot_angle, abs_tol=1e-5)
             if not pd.isnull(self.shot_angle)
             else pd.isnull(other.shot_angle),
             self.gk_optimal_loc_distance == other.gk_optimal_loc_distance
@@ -272,7 +373,9 @@ class ShotEvent(BaseEvent):
             self.goal_gk_distance == other.goal_gk_distance
             if not pd.isnull(self.goal_gk_distance)
             else pd.isnull(other.goal_gk_distance),
-            self.xG == other.xG if not pd.isnull(self.xG) else pd.isnull(other.xG),
+            math.isclose(self.xG, other.xG, abs_tol=1e-5)
+            if not pd.isnull(self.xG)
+            else pd.isnull(other.xG),
         ]
         return all(result)
 
@@ -285,6 +388,9 @@ class ShotEvent(BaseEvent):
             datetime=self.datetime,
             start_x=self.start_x,
             start_y=self.start_y,
+            pitch_size=self.pitch_size,
+            team_side=self.team_side,
+            _xt=self._xt,
             team_id=self.team_id,
             player_id=self.player_id,
             shot_outcome=self.shot_outcome,
@@ -307,7 +413,7 @@ class ShotEvent(BaseEvent):
         )
 
     def _check_datatypes(self):
-        if not isinstance(self.player_id, (int, np.integer)):
+        if not isinstance(self.player_id, (int, np.integer, str)):
             raise TypeError(f"player_id should be int, got {type(self.player_id)}")
         if not isinstance(self.shot_outcome, str):
             raise TypeError(

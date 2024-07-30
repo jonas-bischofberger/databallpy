@@ -16,14 +16,16 @@ from databallpy.data_parsers.tracking_data_parsers import (
 )
 from databallpy.get_match import get_match, get_open_match, get_saved_match
 from databallpy.match import Match
-from databallpy.utils.utils import MISSING_INT
+from databallpy.utils.constants import MISSING_INT
 from databallpy.utils.warnings import DataBallPyWarning
-from expected_outcomes import (
+from tests.expected_outcomes import (
     DRIBBLE_EVENTS_METRICA,
     DRIBBLE_EVENTS_OPTA,
     DRIBBLE_EVENTS_OPTA_TRACAB,
     ED_OPTA,
+    ED_SCISPORTS,
     MD_OPTA,
+    MD_SCISPORTS,
     MD_TRACAB,
     PASS_EVENTS_METRICA,
     PASS_EVENTS_OPTA,
@@ -33,7 +35,8 @@ from expected_outcomes import (
     SHOT_EVENTS_OPTA_TRACAB,
     TD_TRACAB,
 )
-from tests.mocks import ED_METRICA_RAW, MD_METRICA_RAW, TD_METRICA_RAW
+
+from .mocks import ED_METRICA_RAW, MD_METRICA_RAW, TD_METRICA_RAW
 
 
 class TestGetMatch(unittest.TestCase):
@@ -159,9 +162,9 @@ class TestGetMatch(unittest.TestCase):
             away_team_name=self.md_opta.away_team_name,
             away_players=self.expected_away_players_tracab_opta,
             country=self.md_opta.country,
-            shot_events=SHOT_EVENTS_OPTA_TRACAB,
-            dribble_events=DRIBBLE_EVENTS_OPTA_TRACAB,
-            pass_events=PASS_EVENTS_OPTA_TRACAB,
+            shot_events=SHOT_EVENTS_OPTA_TRACAB.copy(),
+            dribble_events=DRIBBLE_EVENTS_OPTA_TRACAB.copy(),
+            pass_events=PASS_EVENTS_OPTA_TRACAB.copy(),
             _tracking_timestamp_is_precise=True,
             _event_timestamp_is_precise=True,
             _periods_changed_playing_direction=[],
@@ -221,7 +224,7 @@ class TestGetMatch(unittest.TestCase):
 
         self.ed_instat_loc = "tests/test_data/instat_ed_test.json"
         self.md_instat_loc = "tests/test_data/instat_md_test.json"
-        self.ed_instat, self.md_instat = load_instat_event_data(
+        self.ed_instat, self.md_instat, _ = load_instat_event_data(
             self.ed_instat_loc, self.md_instat_loc
         )
 
@@ -325,12 +328,7 @@ class TestGetMatch(unittest.TestCase):
             _tracking_timestamp_is_precise=False,
             _periods_changed_playing_direction=[],
         )
-        self.expected_match_inmotio_instat.event_data["team_id"] = [
-            "T-0001",
-            "T-0001",
-            "T-0002",
-            None,
-        ]
+
         self.expected_match_inmotio_instat._periods_changed_playing_direction = [2]
 
         self.match_to_sync = get_match(
@@ -364,31 +362,6 @@ class TestGetMatch(unittest.TestCase):
             country=MD_TRACAB.country,
             _tracking_timestamp_is_precise=True,
             _periods_changed_playing_direction=[],
-        )
-
-        self.expected_match_opta = Match(
-            tracking_data=pd.DataFrame(),
-            tracking_data_provider=None,
-            event_data=ED_OPTA,
-            event_data_provider="opta",
-            pitch_dimensions=MD_OPTA.pitch_dimensions,
-            periods=MD_OPTA.periods_frames,
-            frame_rate=MD_OPTA.frame_rate,
-            home_team_id=MD_OPTA.home_team_id,
-            home_formation=MD_OPTA.home_formation,
-            home_score=MD_OPTA.home_score,
-            home_team_name=MD_OPTA.home_team_name,
-            home_players=MD_OPTA.home_players,
-            away_team_id=MD_OPTA.away_team_id,
-            away_formation=MD_OPTA.away_formation,
-            away_score=MD_OPTA.away_score,
-            away_team_name=MD_OPTA.away_team_name,
-            away_players=MD_OPTA.away_players,
-            country=MD_OPTA.country,
-            shot_events=SHOT_EVENTS_OPTA,
-            dribble_events=DRIBBLE_EVENTS_OPTA,
-            pass_events=PASS_EVENTS_OPTA,
-            _event_timestamp_is_precise=True,
         )
 
     def test_get_match_wrong_inputs(self):
@@ -445,7 +418,32 @@ class TestGetMatch(unittest.TestCase):
         match.event_data[y_cols] = match.event_data[y_cols] / 68.0 * 10
         match.pitch_dimensions = [10.0, 10.0]
 
-        assert match == self.expected_match_opta
+        expected_match_opta = Match(
+            tracking_data=pd.DataFrame(),
+            tracking_data_provider=None,
+            event_data=ED_OPTA,
+            event_data_provider="opta",
+            pitch_dimensions=MD_OPTA.pitch_dimensions,
+            periods=MD_OPTA.periods_frames,
+            frame_rate=MD_OPTA.frame_rate,
+            home_team_id=MD_OPTA.home_team_id,
+            home_formation=MD_OPTA.home_formation,
+            home_score=MD_OPTA.home_score,
+            home_team_name=MD_OPTA.home_team_name,
+            home_players=MD_OPTA.home_players,
+            away_team_id=MD_OPTA.away_team_id,
+            away_formation=MD_OPTA.away_formation,
+            away_score=MD_OPTA.away_score,
+            away_team_name=MD_OPTA.away_team_name,
+            away_players=MD_OPTA.away_players,
+            country=MD_OPTA.country,
+            shot_events=SHOT_EVENTS_OPTA,
+            dribble_events=DRIBBLE_EVENTS_OPTA,
+            pass_events=PASS_EVENTS_OPTA,
+            _event_timestamp_is_precise=True,
+        )
+
+        assert match == expected_match_opta
 
     def test_get_match_only_tracking_data(self):
         match = get_match(
@@ -489,9 +487,11 @@ class TestGetMatch(unittest.TestCase):
             event_data_provider="instat",
             check_quality=False,
         )
-        assert (
-            match_instat_inmotio_unaligned_input == self.expected_match_inmotio_instat
-        )
+        expected_match = self.expected_match_inmotio_instat.copy()
+        expected_match.home_players.loc[:, "id"] = [100, 200]
+        expected_match.event_data.loc[[0, 1], "player_id"] = [200, 100]
+
+        assert match_instat_inmotio_unaligned_input == expected_match
 
     def test_get_match_inmotio_instat(self):
         match_instat_inmotio = get_match(
@@ -575,3 +575,17 @@ class TestGetMatch(unittest.TestCase):
                 tracking_data_provider=self.td_provider,
                 check_quality=True,
             )
+
+    def test_get_match_scisports(self):
+        res_match = get_match(
+            event_data_loc="tests/test_data/scisports_test.json",
+            event_data_provider="scisports",
+        )
+        pd.testing.assert_frame_equal(res_match.event_data, ED_SCISPORTS)
+        pd.testing.assert_frame_equal(res_match.periods, MD_SCISPORTS.periods_frames)
+        pd.testing.assert_frame_equal(res_match.home_players, MD_SCISPORTS.home_players)
+        pd.testing.assert_frame_equal(res_match.away_players, MD_SCISPORTS.away_players)
+
+        self.assertTrue(len(res_match.shot_events) == 2)
+        self.assertTrue(len(res_match.pass_events) == 3)
+        self.assertTrue(len(res_match.dribble_events) == 1)

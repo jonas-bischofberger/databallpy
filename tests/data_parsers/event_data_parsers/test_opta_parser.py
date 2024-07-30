@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 import numpy as np
@@ -47,15 +48,22 @@ class TestOptaParser(unittest.TestCase):
 
         # SHOT_EVENTS_OPTA is scaled to a pitch of [106, 68],
         # while here [10, 10] is expected.
-        shot_events_opta = SHOT_EVENTS_OPTA.copy()
-        for shot_event in shot_events_opta.values():
-            shot_event.start_x = shot_event.start_x / 106 * 10
-            shot_event.start_y = shot_event.start_y / 68 * 10
+        expected_shot_events_opta = {}
+        for shot_id, shot_event in SHOT_EVENTS_OPTA.items():
+            expected_shot_events_opta[shot_id] = shot_event.copy()
+            expected_shot_events_opta[shot_id].start_x = shot_event.start_x / 106.0 * 10
+            expected_shot_events_opta[shot_id].start_y = shot_event.start_y / 68.0 * 10
+            expected_shot_events_opta[shot_id].pitch_size = [10.0, 10.0]
+            expected_shot_events_opta[shot_id]._update_shot_angle()
+            expected_shot_events_opta[shot_id]._update_ball_goal_distance()
+            expected_shot_events_opta[shot_id].xG = expected_shot_events_opta[
+                shot_id
+            ].get_xG()
 
         assert "shot_events" in dbp_events.keys()
         for key, event in dbp_events["shot_events"].items():
-            assert key in shot_events_opta.keys()
-            assert event == shot_events_opta[key]
+            assert key in expected_shot_events_opta.keys()
+            assert event == expected_shot_events_opta[key]
 
     def test_load_event_data_pass(self):
         event_data, metadata, dbp_events = load_opta_event_data(
@@ -205,6 +213,9 @@ class TestOptaParser(unittest.TestCase):
             datetime=pd.to_datetime("2023-04-07T18:02:07.364", utc=True),
             start_x=-4.0279999,
             start_y=-29.852,
+            pitch_size=[106.0, 68.0],
+            team_side="home",
+            _xt=-1.0,
             team_id=325,
             shot_outcome="goal",
             y_target=-1.991040,
@@ -234,7 +245,7 @@ class TestOptaParser(unittest.TestCase):
 
         dribble_event = _make_dribble_event_instance(event, away_team_id=325)
 
-        assert dribble_event == DribbleEvent(
+        expected_dribble_event = DribbleEvent(
             player_id=223345,
             event_id=2529877443,
             period_id=1,
@@ -243,12 +254,16 @@ class TestOptaParser(unittest.TestCase):
             datetime=pd.to_datetime("2023-04-07T18:02:07.364", utc=True),
             start_x=4.0279999,
             start_y=29.852,
+            pitch_size=[106.0, 68.0],
+            team_side="away",
+            _xt=-1.0,
             team_id=325,
             related_event_id=MISSING_INT,
             duel_type="offensive",
             outcome=True,
             has_opponent=True,
         )
+        assert dribble_event == expected_dribble_event
 
     def test_make_pass_event_instance(self):
         event_xml = """
@@ -271,6 +286,9 @@ class TestOptaParser(unittest.TestCase):
             datetime=pd.to_datetime("2022-01-01T00:00:00.000Z", utc=True),
             start_x=0.0,
             start_y=0.0,
+            pitch_size=[106.0, 68.0],
+            team_side="away",
+            _xt=-1.0,
             team_id=1,
             outcome="results_in_shot",
             player_id=1,
@@ -302,8 +320,9 @@ class TestOptaParser(unittest.TestCase):
         self.assertAlmostEqual(y, 34.0)
 
     def test_update_pass_outcome_no_related_event_id(self):
-        shot_events = SHOT_EVENTS_OPTA.copy()
-        pass_events = PASS_EVENTS_OPTA.copy()
+        shot_events = copy.deepcopy(SHOT_EVENTS_OPTA)
+
+        pass_events = copy.deepcopy(PASS_EVENTS_OPTA)
         event_data = ED_OPTA.copy()
 
         for event in shot_events.values():
@@ -316,8 +335,9 @@ class TestOptaParser(unittest.TestCase):
             assert event == pass_events[key]
 
     def test_update_pass_outcome_pass_not_found(self):
-        shot_events = SHOT_EVENTS_OPTA.copy()
-        pass_events = PASS_EVENTS_OPTA.copy()
+        shot_events = copy.deepcopy(SHOT_EVENTS_OPTA)
+
+        pass_events = copy.deepcopy(PASS_EVENTS_OPTA)
         event_data = ED_OPTA.copy()
 
         for event in shot_events.values():
@@ -331,8 +351,9 @@ class TestOptaParser(unittest.TestCase):
             assert event == pass_events[key]
 
     def test_update_pass_outcome_multiple_options(self):
-        shot_events = SHOT_EVENTS_OPTA.copy()
-        pass_events = PASS_EVENTS_OPTA.copy()
+        shot_events = copy.deepcopy(SHOT_EVENTS_OPTA)
+
+        pass_events = copy.deepcopy(PASS_EVENTS_OPTA)
         event_data = ED_OPTA.copy()
 
         for event in shot_events.values():

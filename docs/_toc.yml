@@ -1,0 +1,42 @@
+format: jb-book
+root: index
+parts:
+  - caption: Introduction
+    chapters:
+      - file: introduction/intro_page
+      - file: introduction/intro_event_data_page
+      - file: introduction/intro_tracking_data_page
+  - caption: Getting Started
+    chapters:
+      - file: getting_started/installation_page
+      - file: getting_started/loading_in_a_match_page
+      - file: getting_started/preprocessing_options
+      - file: getting_started/visualizations_page
+      - file: getting_started/synchronisation_page
+  - caption: Features
+    chapters:
+      - file: features/covered_distance_page
+        title: Covered Distances
+      - file: features/pressure_page
+        title: Pressure
+      - file: features/team_and_player_possession
+        title: Team and Player Possession
+      - file: features/simple_xG_models
+      - file: features/xT_models
+      - file: features/space_occupation
+        title: Space Occupation
+  - caption: API Documentation
+    chapters:
+      - file: api_docs/match_api
+      - file: api_docs/preprocessing_api
+      - file: api_docs/visualize_api
+      - file: api_docs/features_api
+  - caption: Contributing
+    chapters:
+      - file: contributing/quick_overview
+      - file: contributing/github
+      - file: contributing/poetry_deps_manager
+      - file: contributing/clean_code_principles
+      - file: contributing/tests
+      - file: contributing/code_of_conduct
+      

@@ -71,4 +71,17 @@
 - Added logging possibilities
 - Refactor of file structure and folder naming
 
+## V0.5.0 (30/07/2024)
+
+- Added event data parser for SciSports
+- Added expected threat model from Karun Singh to on ball events
+- Add function to add which team has ball possession based on the synchronised event data.
+- Solved encoding bug for Windows
+- Added function to obtain acceleration
+- Improved standardization and performance of synchronisation
+- Made save match clip more robust
+- Added function to calculate covered distances in different velocity and acceleration zones
+- Updated the documentation
+
+
 
