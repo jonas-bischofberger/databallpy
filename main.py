@@ -396,6 +396,8 @@ def get_expected_pass_completion(match):
         fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
         st.write("match")
         st.write(match)
+        print(match)
+        print(type(match))
         fig, ax = databallpy.visualize.plot_tracking_data(
             match,
             idx,
@@ -404,8 +406,10 @@ def get_expected_pass_completion(match):
             events=["pass"],
             title="First pass after the kick-off",
             add_velocities=True,
-            variable_of_interest=match.tracking_data.loc[idx, "frame"],
+            variable_of_interest=df_tracking_passes.loc[idx, "xC"],
         )
+        st.write(fig)
+        break
 
     return df_tracking_passes
 
