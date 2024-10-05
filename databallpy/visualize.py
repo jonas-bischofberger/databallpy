@@ -724,9 +724,10 @@ def _pre_check_plot_td_inputs(
     cmap: Colormap | str | None,
 ):
     """Function to check if the inputs for the save_match_clip function are correct."""
-    if not isinstance(match, Match):
-        message = "match should be an instance of databallpy.Match"
-        raise DataBallPyError(message)
+    ### Commented out because of false positive after serializing with streamlit.cache_resource
+    # if not isinstance(match, Match):
+    #     message = "match should be an instance of databallpy.Match"
+    #     raise DataBallPyError(message)
 
     if variable_of_interest is not None:
         if isinstance(variable_of_interest, pd.Series):
@@ -903,7 +904,7 @@ def _plot_single_frame(
             variable_fig_objs.append(fig_obj)
 
     # Plot the ball
-    fig_obj = ax.scatter(td.loc[idx, "ball_x"], td.loc[idx, "ball_y"], c="black")
+    fig_obj = ax.scatter(td.loc[idx, "ball_x"], td.loc[idx, "ball_y"], c="blue", marker="x", s=200, zorder=250)
     variable_fig_objs.append(fig_obj)
 
     # Add time info

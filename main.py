@@ -1,12 +1,24 @@
+import streamlit_profiler
+profiler = streamlit_profiler.Profiler()
+profiler.start()
+
+
 import databallpy.features
+import databallpy.visualize
 import databallpy
 import streamlit as st
 import collections
 import math
 import numpy as np
 import scipy
+import pandas as pd
 import time
 from typing import Literal
+import sklearn.metrics
+
+import matplotlib.pyplot as plt
+
+import dangerous_accessible_space
 
 
 @st.cache_resource
@@ -28,407 +40,425 @@ def get_preprocessed_data():
     return match
 
 
-def simulate_passes(
-    PLAYER_POS,  # F x P x 4[x, y, vx, vy], player positions
-    BALL_POS,  # F x 2[x, y], ball positions
-    phi_grid,  # F x PHI, pass angles
-    v0_grid,  # F x V0, pass speeds
-    passer_team,  # F, team of passers
-    team_list,  # P, player teams
-):
-    ### 1. Calculate ball trajectory
-    # 1.1 Calculate spatial grid
-    start_location_offset = 0.001
-    time_offset_ball = 0.0
-    radial_gridsize = 5
-    D_BALL_SIM = np.linspace(start=start_location_offset, stop=150, num=math.ceil(150 / radial_gridsize))  # T
-    st.write("D_BALL_SIM", D_BALL_SIM.shape)
-    st.write(D_BALL_SIM)
+def _add_attacking_direction_normalized_coordinates(df_tracking, match, col_suffix="_norm"):
+    tracking_player_ids = match.home_players_column_ids() + match.away_players_column_ids() + ["ball"]
+    position_cols = [f"{tracking_player_id}_{coord}" for tracking_player_id in tracking_player_ids for coord in ["x", "y", "vx", "vy"]] + ["start_x", "start_y", "end_x", "end_y"]
+    position_cols_norm = [f"{col}{col_suffix}" for col in position_cols]
+    i_away_possession = df_tracking["ball_possession"] == "away"
+    df_tracking[position_cols_norm] = df_tracking[position_cols]
+    df_tracking.loc[i_away_possession, position_cols_norm] = -df_tracking.loc[i_away_possession, position_cols_norm]
+    return df_tracking
 
-    def time_to_arrive_1d(x, v, x_target):
-        return (x_target - x) / v
 
-    # 1.2 Calculate temporal grid
-    T_BALL_SIM = time_to_arrive_1d(
-        x=D_BALL_SIM[0], v=v0_grid[:, :, np.newaxis], x_target=D_BALL_SIM[np.newaxis, np.newaxis, :],
-    )  # F x V0 x T
-    T_BALL_SIM += time_offset_ball
-    st.write("T_BALL_SIM", T_BALL_SIM.shape)
-    st.write(T_BALL_SIM[:, 0, :])
+@st.cache_resource
+def _get_preprocessed_tracking_and_event_data():
+    match = get_preprocessed_data()
 
-    def simulate_position(x, y, vx, vy, dt):
-        return {
-            "x": x + vx * dt,
-            "y": y + vy * dt,
-        }
+    df_tracking = match.tracking_data
+    players = match.home_players_column_ids() + match.away_players_column_ids() + ["ball"]
+    dft = df_tracking[["frame"] + [f"{player}_{coord}" for player in players for coord in ["x", "y", "vx", "vy"]]]
 
-    # 1.3 Calculate 2D points along ball trajectory
-    st.write("BALL_POS", BALL_POS.shape)
+    player2team = {}
+    for player in players:
+        if player in match.home_players_column_ids():
+            player2team[player] = match.home_team_id
+        elif player in match.away_players_column_ids():
+            player2team[player] = match.away_team_id
+        else:
+            player2team[player] = None
 
-    ball_x = BALL_POS[:, 0]  # F
-    ball_y = BALL_POS[:, 1]  # F
+    dfs_player = []
+    for player in players:
+        df_player = dft[["frame"] + [f"{player}_{coord}" for coord in ["x", "y", "vx", "vy"]]].rename(columns={f"{player}_{coord}": coord for coord in ["x", "y", "vx", "vy"]})
+        df_player["player_id"] = player
+        df_player["team_id"] = player2team[player]
+        dfs_player.append(df_player)
+        dft = dft.drop(columns=[f"{player}_{coord}" for coord in ["x", "y", "vx", "vy"]], axis=1)
+    df_player = pd.concat(dfs_player, axis=0)
 
-    # cos_phi, sin_phi = np.cos(df_tracking_passes["phi"].values), np.sin(df_tracking_passes["phi"].values)  # F
-    cos_phi, sin_phi = np.cos(phi_grid), np.sin(phi_grid)  # F x PHI
+    dft = dft.merge(df_player, on="frame", how="left")
 
-    st.write("phi_grid", phi_grid.shape)
-    st.write(phi_grid)
+    df_event = match.event_data.rename(columns={"td_frame": "frame"})
 
-    st.write("cos_phi", cos_phi.shape, str(type(cos_phi)))
-    st.write(cos_phi)
-    st.write("v0_grid", v0_grid.shape, str(type(v0_grid)))
-    st.write(v0_grid)
-    v0x_ball = v0_grid[:, :, np.newaxis] * cos_phi[:, np.newaxis]  # F x V0 x PHI
-    v0y_ball = v0_grid[:, :, np.newaxis] * sin_phi[:, np.newaxis]  # F x V0 x PHI
-    st.write("v0y_ball", v0y_ball.shape)
-
-    BALL_SIM = simulate_position(  # F x PHI x T
-        x=ball_x[:, np.newaxis, np.newaxis],  # F
-        y=ball_y[:, np.newaxis, np.newaxis],  # F
-        vx=v0x_ball[:, 0, :, np.newaxis],  # F x V0 x PHI, positional grid is independent of V0!
-        vy=v0y_ball[:, 0, :, np.newaxis],  # F x V0 x PHI
-        dt=T_BALL_SIM[:, 0, np.newaxis, :]  # F x V0 x T
-    )
-    X_BALL_SIM = BALL_SIM["x"]  # F x PHI x T
-    Y_BALL_SIM = BALL_SIM["y"]  # F x PHI x T
-    st.write("X_BALL_SIM", X_BALL_SIM.shape)
-    st.write(X_BALL_SIM[:, 0, :])
-    st.write("Y_BALL_SIM", Y_BALL_SIM.shape)
-    st.write(Y_BALL_SIM[:, 0, :])
-
-    ### 2 Calculate player interception rates
-    seconds_to_intercept = 0.5
-    b0 = 0
-    b1 = -5
-
-    def time_to_arrive(x, y, vx, vy, x_target, y_target):
-        return np.hypot(x_target - x, y_target - y) / np.hypot(vx, vy)
-
-    # 2.1 Calculate time to arrive for each player
-    st.write("PLAYER_POS", PLAYER_POS.shape)
-
-    TTA_PLAYERS = time_to_arrive(  # F x P x PHI x T
-        x=PLAYER_POS[:, :, 0][:, :, np.newaxis, np.newaxis],
-        y=PLAYER_POS[:, :, 1][:, :, np.newaxis, np.newaxis],
-        vx=PLAYER_POS[:, :, 2][:, :, np.newaxis, np.newaxis],
-        vy=PLAYER_POS[:, :, 3][:, :, np.newaxis, np.newaxis],
-        x_target=X_BALL_SIM[:, np.newaxis, :, :],
-        y_target=Y_BALL_SIM[:, np.newaxis, :, :],
-    )
-    TTA_PLAYERS = np.nan_to_num(TTA_PLAYERS, nan=np.inf)  # Handle players not participating in the game by setting their TTA to infinity
-    st.write("TTA_PLAYERS", TTA_PLAYERS.shape)
-    st.write(TTA_PLAYERS[0, :, 0, :])
-
-    # 2.2 Transform time to arrive into interception rates
-    def sigmoid(x):
-        return 0.5 * (x / (1 + np.abs(x)) + 1)
-
-    X = TTA_PLAYERS[:, :, np.newaxis, :, :] - T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x P x PHI x T - F x PHI x T = F x P x V0 x PHI x T
-    X[:] = b0 + b1 * X  # 1 + 1 * F x P x V0 x PHI x T = F x P x V0 x PHI x T
-    X[:] = sigmoid(X)
-    X = np.nan_to_num(X, nan=0)  # F x P x V0 x PHI x T
-
-    ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
-
-    st.write("ar_time", ar_time.shape)
-    st.write(ar_time[0, :, 0, 0, :])
-
-    ## 3. Use interception rates to calculate probabilities
-    # 3.1 Sums of interception rates over players
-    sum_ar = np.nansum(ar_time, axis=1)
-
-    # player_list = np.array(player_list)
-    # team_list = np.array(team_list)
-
-    # st.write("team_list", team_list.shape)
-    # st.write(team_list)
-
-    # poss-specific
-    player_is_attacking = team_list[np.newaxis, :] == passer_team[:, np.newaxis]  # F x P
-    st.write("player_is_attacking", player_is_attacking.shape)
-    st.write(player_is_attacking)
-
-    x = np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    y = np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    sum_ar_att = np.nansum(x, axis=1)  # F x V0 x PHI x T
-    sum_ar_def = np.nansum(y, axis=1)  # F x V0 x PHI x T
-
-    st.write("sum_ar_att", sum_ar_att.shape)
-    st.write(sum_ar_att[0, 0, 0, :])
-    st.write("sum_ar_def", sum_ar_def.shape)
-    st.write(sum_ar_def[0, 0, 0, :])
-
-    def integrate_trapezoid(y, x):
-        return scipy.integrate.cumulative_trapezoid(y=y, x=x, initial=0, axis=-1)  # * radial_gridsize # F x V0 x PHI x T
-
-    # poss-specific
-    ### Comment in to use Simpson integration, DO NOT USE until properly vectorized... it's a major bottleneck and probably not better than trapezoid
-    int_sum_ar = integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    int_sum_ar_att = integrate_trapezoid(y=sum_ar_att, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    int_sum_ar_def = integrate_trapezoid(y=sum_ar_def, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-
-    st.write("int_sum_ar", int_sum_ar.shape)
-    st.write(int_sum_ar[0, 0, 0, :])
-    st.write("int_sum_ar_att", int_sum_ar_att.shape)
-    st.write(int_sum_ar_att[0, 0, 0, :])
-    st.write("int_sum_ar_def", int_sum_ar_def.shape)
-    st.write(int_sum_ar_def[0, 0, 0, :])
-
-    # Cumulative probabilities from integrals
-    p0_cum = np.exp(-int_sum_ar) #if "prob" in ptypes else None  # F x V0 x PHI x T, cumulative probability that no one intercepted
-    p0_cum_only_att = np.exp(-int_sum_ar_att) #if "poss" in ptypes else None  # F x V0 x PHI x T
-    p0_cum_only_def = np.exp(-int_sum_ar_def) #if "poss" in ptypes else None  # F x V0 x PHI x T
-    p0_only_opp = np.where(
-        player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis],
-        p0_cum_only_def[:, np.newaxis, :, :, :], p0_cum_only_att[:, np.newaxis, :, :, :]
-    ) #if "poss" in ptypes else None  # F x P x V0 x PHI x T
-
-    st.write("p0_cum", p0_cum.shape)
-    st.write(p0_cum[0, 0, 0, :])
-    st.write("p0_cum_only_att", p0_cum_only_att.shape)
-    st.write(p0_cum_only_att[0, 0, 0, :])
-
-    # Individual probability densities
-    pr_prob = p0_cum[:, np.newaxis, :, :, :] * ar_time  # if "prob" in ptypes else None  # F x P x V0 x PHI x T
-    pr_cum = integrate_trapezoid(  # F x P x V0 x PHI x T, cumulative probability that player P intercepted
-        y=pr_prob,  # F x P x V0 x PHI x T
-        x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
-    )  # if add_receiver else None
-
-    st.write("pr_prob", pr_prob.shape)
-
-    pr_poss = p0_only_opp * ar_time  # if "poss" in ptypes else None  # F x P x V0 x PHI x T
-    pr_cum_poss = integrate_trapezoid(  # F x P x V0 x PHI x T
-        y=pr_poss,  # F x P x V0 x PHI x T
-        x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
-    )  # if add_receiver else None
-
-    st.write("pr_poss", pr_poss.shape)
-
-    # Aggregate over v0
-    # TODO use probability distribution. Bei prob auch phi-aggregation nötig -> ggf komplizierte Kombinationen...
-    dpr_over_dx_vagg_prob = np.average(pr_prob, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T
-    dpr_over_dx_vagg_poss = np.max(pr_poss, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
-
-    p0_cum_vagg = np.mean(p0_cum, axis=1)  # if add_receiver else None  # F x PHI x T
-    pr_cum_vagg = np.mean(pr_cum, axis=2)  # if add_receiver else None  # F x P x PHI x T
-    pr_cum_poss_vagg = np.max(pr_cum_poss, axis=2)  # if add_receiver else None  # F x P x V0 x PHI x T -> F x P x V0 x PHI x T
-
-#     if self.cap_pos:
-    pr_cum_poss_vagg = np.minimum(pr_cum_poss_vagg, 1)
-
-    pr_cum_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-    pr_cum_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-    pr_cum_poss_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_poss_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-    pr_cum_poss_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_poss_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-
-    # if self.cap_pos:
-    pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
-    pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
-    st.write("pr_cum_att", pr_cum_att.shape)
-    st.write("pr_cum_poss_att", pr_cum_poss_att.shape)
-
-    pr_cum_final_att = pr_cum_att[:, :, -1] #if add_receiver and add_final else None  # F x PHI
-    pr_cum_poss_final_att = pr_cum_poss_att[:, :, -1] #if add_receiver and add_final else None
-    pr_cum_final_def = pr_cum_def[:, :, -1] #if add_receiver and add_final else None  # F x PHI
-    pr_cum_poss_final_def = pr_cum_poss_def[:, :, -1] #if add_receiver and add_final else None
-    st.write("pr_cum_final_att", pr_cum_final_att.shape)
-    st.write("pr_cum_poss_final_att", pr_cum_poss_final_att.shape)
-
-    Result = collections.namedtuple("Result", [
-        "pr_cum_att",
-        "pr_cum_poss_att",
-    ])
-    result = Result(pr_cum_att, pr_cum_poss_att)
-
-    return result
+    return dft, df_event
 
 
 def get_expected_pass_completion(match):
-    ed = match.event_data
-    df = match.passes_df
-    pe = match.pass_events
-    td = match.tracking_data
-    td = td.merge(ed[[col for col in ed.columns if col not in td.columns or col == "event_id"]], on="event_id", how="left")
+    df_tracking, df_event = _get_preprocessed_tracking_and_event_data()
 
-    # check that no columns are duplicates
-    assert len(set(td.columns)) == len(td.columns)
-
-    x_cols = [col for col in match.tracking_data.columns if col.endswith("x")]
-    y_cols = [col for col in match.tracking_data.columns if col.endswith("y")]
-
-    # Normalize coordinates
-    tracking_player_ids = match.home_players_column_ids() + match.away_players_column_ids() + ["ball"]
-    position_cols = [f"{tracking_player_id}_{coord}" for tracking_player_id in tracking_player_ids for coord in ["x", "y", "vx", "vy"]] + ["start_x", "start_y", "end_x", "end_y"]
-    i_away_possession = td["ball_possession"] == "away"
-    td.loc[i_away_possession, position_cols] = -td.loc[i_away_possession, position_cols]
-
-    td = td.rename(columns=lambda c: f"{c}_norm" if c in position_cols else c)
-    position_cols_norm = [f"{col}_norm" for col in position_cols]
-
-    st.write("ed")
-    st.write(ed)
-    df_passes = ed[ed["databallpy_event"] == "pass"]
-
-    teamid2team = {match.home_team_id: "home", match.away_team_id: "away"}
-    td["team"] = td["team_id"].map(teamid2team)
-
-    # match.passes_df or the match.pass_events
-
-    df_tracking = td
-
-    df_tracking["event_id"] = df_tracking["event_id"].replace(-999, np.nan)
-    df_tracking["pass_id"] = df_tracking["event_id"].where(df_tracking["databallpy_event"] == "pass", np.nan)
-    df_tracking_passes = df_tracking[df_tracking["databallpy_event"] == "pass"]
-
-    st.write("df_tracking_passes", df_tracking_passes.shape)
-    st.write(df_tracking_passes.head(500))
+    df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
+    df_passes = df_passes.rename(columns={"tracking_frame": "frame"})
 
     ### 1. Prepare data
     # 1.1 Extract player positions
-    x_cols = [col for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end"))]
-    x_cols_players = [col for col in x_cols if "ball" not in col]
+    # x_cols = [col for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end"))]
+    # x_cols_players = [col for col in x_cols if "ball" not in col]
+    #
+    # coordinates = ["_x_norm", "_y_norm", "_vx_norm", "_vy_norm"]
+    #
+    # df_coords = df_tracking_passes[[f"{x_col.replace('_x_norm', coord)}" for x_col in x_cols_players for coord in coordinates]]
+    #
+    # st.write("df_coords")
+    # st.write(df_coords)
+    #
+    # F = df_coords.shape[0]  # number of frames
+    # C = len(coordinates)
+    # P = df_coords.shape[1] // len(coordinates)
+    # PLAYER_POS = df_coords.values.reshape(F, P, C)#.transpose(1, 0, 2)  # F x P x C
+    # st.write("PLAYER_POS", PLAYER_POS.shape)
+    # st.write(PLAYER_POS[0, :, :])
+    i_pass_in_tracking = df_tracking["frame"].isin(df_passes["frame"])
 
-    coordinates = ["_x_norm", "_y_norm", "_vx_norm", "_vy_norm"]
-
-    df_coords = df_tracking_passes[[f"{x_col.replace('_x_norm', coord)}" for x_col in x_cols_players for coord in coordinates]]
-
-    st.write("df_coords")
-    st.write(df_coords)
-
-    F = df_coords.shape[0]  # number of frames
-    C = len(coordinates)
-    P = df_coords.shape[1] // len(coordinates)
-    PLAYER_POS = df_coords.values.reshape(F, P, C)#.transpose(1, 0, 2)  # F x P x C
-    st.write("PLAYER_POS", PLAYER_POS.shape)
-    st.write(PLAYER_POS[0, :, :])
+    PLAYER_POS, BALL_POS, player_list, team_list = dangerous_accessible_space.get_matrix_coordinates(df_tracking.loc[i_pass_in_tracking], frame_col="frame", player_col="player_id")
 
     # 1.2 Extract ball position
-    BALL_POS = df_tracking_passes[[f"ball{coord}" for coord in coordinates]].values  # F x C
-    st.write("BALL_POS", BALL_POS.shape)
-    st.write(BALL_POS)
+    # BALL_POS = df_tracking_passes[[f"ball{coord}" for coord in coordinates]].values  # F x C
+    # st.write("BALL_POS", BALL_POS.shape)
+    # st.write(BALL_POS)
 
     # 1.3 Extract v0 as mean ball_velocity of the first N frames after the pass
-    n_frames_after_pass_for_v0 = 5
-    fallback_v0 = 10
+    st.write("df_passes A")
+    st.write(df_passes)
+    df_passes["v0"] = dangerous_accessible_space.get_pass_velocity(df_passes, df_tracking[df_tracking["player_id"] == "ball"], frame_col="frame")
 
-    df_tracking_passes["pass_nr"] = df_tracking_passes.index
-    index = [[idx + i for i in range(n_frames_after_pass_for_v0)] for idx in df_tracking_passes.index]
-    index = [item for sublist in index for item in sublist]
-    df_tracking_v0 = df_tracking.loc[index]
-    df_tracking_v0["related_pass_id"] = df_tracking_v0["pass_id"].ffill()
-    dfg_v0 = df_tracking_v0.groupby("related_pass_id")["ball_velocity"].mean()
-    df_tracking_passes["v0"] = df_tracking_passes["pass_id"].map(dfg_v0)
+    st.write("df_passes B")
+    st.write(df_passes)
+    st.write("df_tracking")
+    st.write(df_tracking.head(5000))
 
-    df_tracking_passes["v0"] = df_tracking_passes["v0"].fillna(fallback_v0)  # Set a reasonable default if no ball data was available during the first N frames
+    # df_tracking_passes["pass_nr"] = df_tracking_passes.index
+    # index = [[idx + i for i in range(n_frames_after_pass_for_v0)] for idx in df_tracking_passes.index]
+    # index = [item for sublist in index for item in sublist]
+    # df_tracking_v0 = df_tracking_and_event.loc[index]
+    # df_tracking_v0["related_pass_id"] = df_tracking_v0["pass_id"].ffill()
+    # dfg_v0 = df_tracking_v0.groupby("related_pass_id")["ball_velocity"].mean()
+    # df_tracking_passes["v0"] = df_tracking_passes["pass_id"].map(dfg_v0)
+    # df_tracking_passes["v0"] = df_tracking_passes["v0"].fillna(fallback_v0)  # Set a reasonable default if no ball data was available during the first N frames
 
-    v0_grid = df_tracking_passes["v0"].values[:, np.newaxis]  # F x V0
+    v0_grid = df_passes["v0"].values.repeat(30).reshape(-1, 30)  # F x V0
 
     # 1.4 Extract starting angle (phi)
-    df_tracking_passes["phi"] = np.arctan2(df_tracking_passes["end_y_norm"] - df_tracking_passes["start_y_norm"], df_tracking_passes["end_x_norm"] - df_tracking_passes["start_x_norm"])
+    df_passes["phi"] = np.arctan2(df_passes["end_y"] - df_passes["start_y"], df_passes["end_x"] - df_passes["start_x"])
 
-    st.write("df_tracking_passes", df_tracking_passes.shape)
-    st.write(df_tracking_passes)
+    st.write("df_passes", df_passes.shape)
+    st.write(df_passes)
     st.write("v0_grid", v0_grid.shape)
     st.write(v0_grid)
 
-    phi_grid = df_tracking_passes["phi"].values[:, np.newaxis]  # F x PHI
+    phi_grid = df_passes["phi"].values[:, np.newaxis]  # F x PHI
+
+    st.write("df_passes")
+    st.write(df_passes)
 
     # 1.5 Extract player team info
-
-    passer_team = df_tracking_passes["team"].values  # F
+    passer_team = df_passes["team_id"].values  # F
     st.write("passer_team", passer_team.shape)
     st.write(passer_team)
 
-    ball_possession = df_tracking_passes["ball_possession"].values  # F
-    st.write("ball_possession", ball_possession.shape)
-    st.write(ball_possession)
+    # ball_possession = df_tracking_passes["ball_possession"].values  # F
+    # st.write("ball_possession", ball_possession.shape)
+    # st.write(ball_possession)
 
-    i_not_same = passer_team != ball_possession
+    # player_list = [col.split("_x_norm")[0] for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end") or "ball" in col)]  # P
+    # st.write("player_list", len(player_list))
+    # st.write(player_list)
 
-    if i_not_same.any():
-        st.warning(f"Passer team and tracking ball possession team are not the same for {i_not_same.sum()} passes. Prefer event info.")
+    # team_list = np.array(["home" if "home" in player else "away" for player in player_list])  # P
 
-    player_list = [col.split("_x_norm")[0] for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end") or "ball" in col)]  # P
-    st.write("player_list", len(player_list))
-    st.write(player_list)
-
-    team_list = np.array(["home" if "home" in player else "away" for player in player_list])  # P
     player_list = np.array(player_list)  # P
+    team_list = np.array(team_list)  # P
 
-    simulation_result = simulate_passes(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list)
+    simulation_result = dangerous_accessible_space.simulate_passes(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list)
 
-    st.write("simulation_result")
-    st.write(simulation_result)
+    xc = simulation_result.p_cum_att[:, 0, -1]  # F x PHI x T ---> F
+    df_passes["xC"] = xc
 
-    p = simulation_result.pr_cum_poss_att  # F x PHI x T
-    xc = simulation_result.pr_cum_poss_att[:, 0, -1]  # F
-    df_tracking_passes["xC"] = xc
-    st.write("p.shape")
-    st.write(p.shape)
+    st.write("df_passes")
+    st.write(df_passes)
 
-    st.write("df_tracking_passes")
-    st.write(df_tracking_passes)
-
-    import sklearn.metrics
-
-    brier = np.mean(df_tracking_passes["outcome"] - df_tracking_passes["xC"])**2
-    logloss = sklearn.metrics.log_loss(df_tracking_passes["outcome"], df_tracking_passes["xC"])
-    average_completion_rate = np.mean(df_tracking_passes["outcome"])
+    brier = np.mean(df_passes["outcome"] - df_passes["xC"])**2
+    logloss = sklearn.metrics.log_loss(df_passes["outcome"], df_passes["xC"])
+    average_completion_rate = np.mean(df_passes["outcome"])
     st.write("average_completion_rate")
     st.write(average_completion_rate)
 
-    brier_baseline = np.mean((df_tracking_passes["outcome"] - average_completion_rate)**2)
+    brier_baseline = np.mean((df_passes["outcome"] - average_completion_rate)**2)
 
     st.write("brier", brier)
     st.write("logloss", logloss)
     st.write("brier_baseline", brier_baseline)
 
-    xc = df_tracking_passes["xC"]
+    xc = df_passes["xC"]
+
+    df_passes["xC_string"] = xc.apply(lambda x: f"xC={x:.1%}")
 
     st.write("xc", xc)
 
-    # import databallpy.visualize
-
-    for pass_index, p4ss in df_tracking_passes.iterrows():
-        idx = pass_index
-        import databallpy.visualize
+    for pass_nr, (pass_index, p4ss) in enumerate(df_passes.iterrows()):
         fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
-        st.write("match")
-        st.write(match)
-        print(match)
-        print(type(match))
         fig, ax = databallpy.visualize.plot_tracking_data(
             match,
-            idx,
+            p4ss["frame"],
             fig=fig,
             ax=ax,
-            events=["pass"],
+            team_colors=["blue", "red"],
+            # events=["pass"],
             title="First pass after the kick-off",
             add_velocities=True,
-            variable_of_interest=df_tracking_passes.loc[idx, "xC"],
+            variable_of_interest=df_passes.loc[pass_index, "xC_string"],
+        )
+        st.write("p4ss")
+        st.write(df_passes)
+        st.write("match.passes_df.loc[pass_index]")
+        st.write(match.passes_df)
+        plt.arrow(
+            p4ss["start_x"], p4ss["start_y"], p4ss["end_x"] - p4ss["start_x"],
+            p4ss["end_y"] - p4ss["start_y"], head_width=1, head_length=1, fc='blue', ec='blue'
         )
         st.write(fig)
-        break
+        plt.close(fig)
 
-    return df_tracking_passes
+        if pass_nr > 5:
+            break
 
+    return df_passes
+
+
+#     PLAYER_POS,  # F x P x 4[x, y, vx, vy], player positions
+#     BALL_POS,  # F x 2[x, y], ball positions
+#     phi_grid,  # F x PHI, pass angles
+#     v0_grid,  # F x V0, pass speeds
+#     passer_team,  # F, team of passers
+#     team_list,  # P, player teams
+
+
+def plot_expected_completion_surface(simulation_result, fr, plot_gridpoints=True):
+    # simulation_result = mask_out_of_play(simulation_result)
+
+    p = simulation_result.p_density_att[fr, :, :]  # F x PHI x T
+    # simulation_result.on_pitch_mask # phi_grid, on_pitch_mask
+
+    # st.write(simulation_result.x0_grid.shape)  # F
+    # st.write(simulation_result.r_grid.shape)  # T
+    # st.write(simulation_result.phi_grid.shape)  # F x PHI
+
+    # x_grid = simulation_result.x0_grid[:, np.newaxis, np.newaxis] + simulation_result.r_grid[np.newaxis, np.newaxis, :] * np.cos(simulation_result.phi_grid[:, :, np.newaxis])  # F x PHI x T
+    # y_grid = simulation_result.y0_grid[:, np.newaxis, np.newaxis] + simulation_result.r_grid[np.newaxis, np.newaxis, :] * np.sin(simulation_result.phi_grid[:, :, np.newaxis])  # F x PHI x T
+    #
+    # x_grid = x_grid[fr, :, :]
+    # y_grid = y_grid[fr, :, :]
+
+    x_grid = simulation_result.x_grid[fr, :, :]
+    y_grid = simulation_result.y_grid[fr, :, :]
+
+    st.write(f"x_grid[fr={fr}, phi=:, T=:]", x_grid.shape)
+    st.write(x_grid)
+    st.write(f"y_grid[fr={fr}, phi=:, T=:]", y_grid.shape)
+    st.write(y_grid)
+    st.write(f"p[fr={fr}, phi=:, T=:]", p.shape)
+    st.write(p)
+
+    x = np.ravel(x_grid)  # F*PHI*T
+    y = np.ravel(y_grid)  # F*PHI*T
+    z = p
+    z = np.ravel(z)  # F*PHI*T
+
+    z = np.minimum(z, 0.9)
+
+    areas = 10
+    absolute_scale = False
+    if absolute_scale:
+        levels = np.linspace(start=0, stop=1.1, num=areas + 1, endpoint=True)
+    else:
+        levels = np.linspace(start=0, stop=np.max(z)+0.00001, num=areas + 1, endpoint=True)
+    saturations = [x / (areas) for x in range(areas)]
+    import matplotlib.colors
+    base_color = matplotlib.colors.to_rgb("blue")
+    def adjust_saturation(color, saturation):
+        import colorsys
+        h, l, s = colorsys.rgb_to_hls(*color)
+        return colorsys.hls_to_rgb(h, l, saturation)
+
+    colors = [adjust_saturation(base_color, s) for s in saturations]
+
+    # Create a triangulation
+    import matplotlib.tri
+    triang = matplotlib.tri.Triangulation(x, y)
+    cp = plt.tricontourf(x, y, z.T, colors=colors, alpha=0.1, cmap=None, levels=levels)  # Comment in to use [0, 1] scale
+    plt.tricontourf(triang, z.T, colors=colors, alpha=0.1, cmap=None, levels=levels)  # Comment in to use [0, 1] scale
+
+    if plot_gridpoints:
+        plt.plot(x, y, 'ko', ms=0.5)
+
+
+def aggregate_surface_area(result):
+    st.write("result")
+    st.write(result._fields)
+
+    result = dangerous_accessible_space.mask_out_of_play(result)
+
+    # Get r-part of area elements
+    r_grid = result.r_grid  # T
+
+    r_lower_bounds = np.zeros_like(r_grid)  # Initialize with zeros
+    r_lower_bounds[1:] = (r_grid[:-1] + r_grid[1:]) / 2  # Midpoint between current and previous element
+    r_lower_bounds[0] = r_grid[0]  # Set lower bound for the first element
+
+    r_upper_bounds = np.zeros_like(r_grid)  # Initialize with zeros
+    r_upper_bounds[:-1] = (r_grid[:-1] + r_grid[1:]) / 2  # Midpoint between current and next element
+    r_upper_bounds[-1] = r_grid[-1]  # Arbitrarily high upper bound for the last element
+
+    dr = r_upper_bounds - r_lower_bounds  # T
+    st.write("dr", dr.shape)
+    st.write(dr)
+
+    # Get phi-part of area elements
+    phi_grid = result.phi_grid  # F x PHI
+    st.write("phi_grid", phi_grid.shape)
+    st.write(phi_grid)
+
+    # dA = np.diff(phi_grid, axis=1) * r_grid[:, np.newaxis]  # F x PHI-1 x T
+
+    phi_lower_bounds = np.zeros_like(phi_grid)  # F x PHI
+    phi_lower_bounds[:, 1:] = (phi_grid[:, :-1] + phi_grid[:, 1:]) / 2  # Midpoint between current and previous element
+    phi_lower_bounds[:, 0] = phi_grid[:, 0]
+
+    phi_upper_bounds = np.zeros_like(phi_grid)  # Initialize with zeros
+    phi_upper_bounds[:, :-1] = (phi_grid[:, :-1] + phi_grid[:, 1:]) / 2  # Midpoint between current and next element
+    phi_upper_bounds[:, -1] = phi_grid[:, -1]  # Arbitrarily high upper bound for the last element
+
+    st.write("phi_lower_bounds", phi_lower_bounds.shape)
+    st.write(phi_lower_bounds)
+
+    st.write("phi_upper_bounds", phi_upper_bounds.shape)
+    st.write(phi_upper_bounds)
+
+    dphi = phi_upper_bounds - phi_lower_bounds  # F x PHI
+
+    outer_bound_circle_slice_area = dphi[:, :, np.newaxis]/(2*np.pi) * (np.pi * r_upper_bounds[np.newaxis, np.newaxis, :]**2)  # T
+    inner_bound_circle_slice_area = dphi[:, :, np.newaxis]/(2*np.pi) * (np.pi * r_lower_bounds[np.newaxis, np.newaxis, :]**2)  # T
+
+    dA = outer_bound_circle_slice_area - inner_bound_circle_slice_area  # F x PHI x T
+
+    p = result.p_density_att * dr
+    st.write("result.p_density_att", result.p_density_att.shape)
+    st.write(result.p_density_att[0, :, :])
+    st.write("p", p.shape)
+    st.write(p[0, :, :])
+    AS = np.sum(p * dA, axis=(1, 2))  # F
+
+    return AS
+
+    # xt = get_xT_prediction(x, y, THROW_IN_XT)
+
+    st.stop()
+
+
+def get_dangerous_accessible_space(match):
+    fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
+
+    df_tracking, df_events = _get_preprocessed_tracking_and_event_data()
+
+    df_passes = df_events[df_events["databallpy_event"] == "pass"].reset_index().iloc[:10]
+    df_tracking = df_tracking[df_tracking["frame"].isin(df_passes["frame"])]
+    valid_frames = df_tracking[(df_tracking["player_id"] == "ball") & (df_tracking["x"].notna())]["frame"]
+    df_passes = df_passes[df_passes["frame"].isin(valid_frames)]
+
+    st.write("df_tracking")
+    st.write(df_tracking)
+    st.write("df_passes")
+    st.write(df_passes)
+
+    import dangerous_accessible_space
+    PLAYER_POS, BALL_POS, player_list, team_list = dangerous_accessible_space.get_matrix_coordinates(df_tracking, frame_col="frame", player_col="player_id")
+
+    F = PLAYER_POS.shape[0]
+
+    n_angles = 3#50
+    phi_offset = 0#-math.pi/16
+    n_v0 = 20
+
+    phi_grid = np.tile(np.linspace(phi_offset, 2*np.pi+phi_offset, n_angles, endpoint=False), (F, 1))  # F x PHI
+
+    # st.write("phi_grid", phi_grid.shape)
+    # st.write(phi_grid)
+
+    v0_grid = np.tile(np.linspace(3, 40, n_v0), (F, 1))  # F x V0
+    # passer_team = df_tracking_and_event["ball_possession"].values  # F
+    passer_team = team_list
+
+    # this should be returned by _get_matrix_coordinates
+    # team_list = np.array(["home" if "home" in player else "away" for player in match.home_players_column_ids() + match.away_players_column_ids()])  # P
+
+    simulation_result = dangerous_accessible_space.simulate_passes_chunked(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list)
+    # simulation_result = mask_out_of_play(simulation_result)
+    st.write("B")
+
+    # simulation_result_das = dangerous_accessible_space.add_xT_to_result(simulation_result)
+
+    fig, ax = databallpy.visualize.plot_tracking_data(
+        match,
+        df_tracking.iloc[0]["frame"],
+        fig=fig,
+        ax=ax,
+        events=["pass"],
+        add_velocities=True,
+    )
+    # plot_expected_completion_surface(simulation_result_das, 0)
+    plot_expected_completion_surface(simulation_result, 0)
+    st.write(fig)
+
+    accessible_space = aggregate_surface_area(simulation_result)
+    st.write("AS", accessible_space)
+    df_passes["AS"] = accessible_space
+    # dangerous_accessible_space = aggregate_surface_area(simulation_result_das)
+    # st.write("DAS", dangerous_accessible_space)
+    # df_passes["DAS"] = dangerous_accessible_space
+
+    return df_passes
+
+    # return simulation_result
+
+
+#     PLAYER_POS,  # F x P x 4[x, y, vx, vy], player positions
+#     BALL_POS,  # F x 2[x, y], ball positions
+#     phi_grid,  # F x PHI, pass angles
+#     v0_grid,  # F x V0, pass speeds
+#     passer_team,  # F, team of passers
+#     team_list,  # P, player teams
 
 def main():
     match = get_preprocessed_data()
 
-    df = match.event_data
-    st.write("df")
-    st.write(df)
-    st.write(df["outcome"].mean())
-    st.write(df["metrica_event"].unique())
-
     st.write("match.event_data")
     st.write(match.event_data)
+    st.write("match.tracking_data")
+    st.write(match.tracking_data.head(500))
 
-    df_passes = get_expected_pass_completion(match)
-    st.write("result df_passes")
-    st.write(df_passes)
+    # fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
+    # fig, ax = databallpy.visualize.plot_tracking_data(
+    #     match,
+    #     10000,
+    #     fig=fig,
+    #     ax=ax,
+    #     events=["pass"],
+    #     title="First pass after the kick-off",
+    #     add_velocities=True,
+    #     variable_of_interest="test",
+    # )
+    # st.write(fig)
+
+    df_tracking, df_event = _get_preprocessed_tracking_and_event_data()
+
+    # df_tracking_passes = get_expected_pass_completion(match)
+    # st.write("result df_tracking_passes")
+    # st.write(df_tracking_passes)
+
+    df_das = get_dangerous_accessible_space(match)
+    st.write("result df_das")
+    st.write(df_das)
+
+    profiler.stop()
 
 
 if __name__ == '__main__':
