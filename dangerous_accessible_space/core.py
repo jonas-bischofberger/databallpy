@@ -23,36 +23,67 @@ _result_fields = [
 ]
 Result = collections.namedtuple("Result", _result_fields, defaults=[None] * len(_result_fields))
 
-
-DEFAULT_B0 = -5
-DEFAULT_B1 = -20
-DEFAULT_PASS_START_LOCATION_OFFSET = 0
-DEFAULT_TIME_OFFSET_BALL = 0
-DEFAULT_SECONDS_TO_INTERCEPT = 0.1
-DEFAULT_TOL_DISTANCE = 5
-DEFAULT_PLAYER_VELOCITY = 7
-DEFAULT_KEEP_INERTIAL_VELOCITY = True
-DEFAULT_A_MAX = 14.256003027575932
-DEFAULT_V_MAX = 12.865546440947865
-DEFAULT_USE_MAX = False
-DEFAULT_USE_APPROX_TWO_POINT = True
-DEFAULT_INERTIAL_SECONDS = 0.2
-DEFAULT_RADIAL_GRIDSIZE = 3
-
-# DEFAULT_B0 = -1.3075312012275244
-# DEFAULT_B1 = -65.57184250749606
-# DEFAULT_PASS_START_LOCATION_OFFSET = 0.2821895970952328
-# DEFAULT_TIME_OFFSET_BALL = -0.09680365586691105
-# DEFAULT_SECONDS_TO_INTERCEPT = 1.1650841463114299
-# DEFAULT_TOL_DISTANCE = 2.5714050933456036
-# DEFAULT_PLAYER_VELOCITY = 3.984451038279267
+# DEFAULT_B0 = -5
+# DEFAULT_B1 = -20
+# DEFAULT_PASS_START_LOCATION_OFFSET = 0
+# DEFAULT_TIME_OFFSET_BALL = 0
+# DEFAULT_SECONDS_TO_INTERCEPT = 0.1
+# DEFAULT_TOL_DISTANCE = 5
+# DEFAULT_PLAYER_VELOCITY = 7
 # DEFAULT_KEEP_INERTIAL_VELOCITY = True
 # DEFAULT_A_MAX = 14.256003027575932
 # DEFAULT_V_MAX = 12.865546440947865
-# DEFAULT_USE_MAX = True
+# DEFAULT_USE_MAX = False
 # DEFAULT_USE_APPROX_TWO_POINT = True
-# DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
-# DEFAULT_RADIAL_GRIDSIZE = 4.674367855798807
+# DEFAULT_INERTIAL_SECONDS = 0.2
+# DEFAULT_RADIAL_GRIDSIZE = 3
+
+
+
+
+#             ### best (b0=-5, b1=-20, 9/0.2/5 MM, start=3, num=80, stop=22.5)
+#             fields = LowSpearmanLike(
+# #            b0=-5,
+# #             b1=-1,
+# #                 b0=-1,
+#             b0_att=0,
+#             b0_def=0,  # -0.5 best so far
+#
+#
+#             b1_att=-25,
+#             b1_def=-25,
+#             mm_player=models.motion.ApproxTwoPoint(
+#                 use_max=False, velocity=7,
+#                 inertial_seconds=0.25,
+#                 keep_inertial_velocity=True,
+#                 tol_distance=None,
+#             ),
+#             # mm_player=models.motion.ConstVel(7),
+#             mm_ball=models.motion.NoForce(),
+#             pass_selector=models.pass_selection.low.Uniform(
+#                 n_angles=4 * 30,  # Anzahl der Winkel durch 4 teilbar => ca. isotrop?
+#                 # velocity_range=np.linspace(start=3, stop=22.5, num=7, endpoint=True),
+#                 velocity_range=np.linspace(start=3, stop=22.5, num=60, endpoint=True),
+#                 mode="poss"  # TODO hier prob/poss unterscheidung rein
+#             ),
+#             ).get_field_matrix(
+#                 game, unit="dp", offside=False, single_half=0, single_fr=fr, gridsize=2,
+#             )
+
+DEFAULT_B0 = -1.3075312012275244
+DEFAULT_B1 = -65.57184250749606
+DEFAULT_PASS_START_LOCATION_OFFSET = 0#0.2821895970952328
+DEFAULT_TIME_OFFSET_BALL = 0#-0.09680365586691105
+DEFAULT_SECONDS_TO_INTERCEPT = 1.1650841463114299
+DEFAULT_TOL_DISTANCE = 2.5714050933456036
+DEFAULT_PLAYER_VELOCITY = 3.984451038279267
+DEFAULT_KEEP_INERTIAL_VELOCITY = True
+DEFAULT_A_MAX = 14.256003027575932
+DEFAULT_V_MAX = 12.865546440947865
+DEFAULT_USE_MAX = True
+DEFAULT_USE_APPROX_TWO_POINT = True
+DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
+DEFAULT_RADIAL_GRIDSIZE = 4.674367855798807
 #
 
 def sigmoid(x):
@@ -138,19 +169,27 @@ def simulate_passes(
         TTA_PLAYERS[i_frames, i_passers_to_exclude, :, :] = np.inf  # F x P x PHI x T
 
     TTA_PLAYERS = np.nan_to_num(TTA_PLAYERS, nan=np.inf)  # Handle players not participating in the game by setting their TTA to infinity
+    st.write("T_BALL_SIM[fr=0, PHI=0, T=:]", T_BALL_SIM.shape)
+    st.write(T_BALL_SIM[0, 0, :])
+    st.write("TTA_PLAYERS[fr=0, P=:, PHI=0, T=:]", TTA_PLAYERS.shape)
+    st.write(TTA_PLAYERS[0, :, 0, :])
 
     # 2.2 Transform time to arrive into interception rates
     X = TTA_PLAYERS[:, :, np.newaxis, :, :] - T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x P x PHI x T - F x PHI x T = F x P x V0 x PHI x T
+    st.write("X[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
+    st.write(X[0, :, 0, 0, :])
     X[:] = b0 + b1 * X  # 1 + 1 * F x P x V0 x PHI x T = F x P x V0 x PHI x T
     X[:] = sigmoid(X)
     X = np.nan_to_num(X, nan=0)  # F x P x V0 x PHI x T
     ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
-    # st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]")
-    # st.write(ar_time[0, :, 0, 0, :])
+    st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape)
+    st.write(ar_time[0, :, 0, 0, :])
 
     ## 3. Use interception rates to calculate probabilities
     # 3.1 Sums of interception rates over players
-    sum_ar = np.nansum(ar_time, axis=1)
+    sum_ar = np.nansum(ar_time, axis=1)  # F x V0 x PHI x T
+    st.write("sum_ar[fr=0, v0=0, phi=0, T=:]", sum_ar.shape)
+    st.write(sum_ar[0, 0, 0, :])
 
     # poss-specific
     player_is_attacking = player_teams[np.newaxis, :] == passer_teams[:, np.newaxis]  # F x P
@@ -163,6 +202,8 @@ def simulate_passes(
     int_sum_ar = integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
     int_sum_ar_att = integrate_trapezoid(y=sum_ar_att, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
     int_sum_ar_def = integrate_trapezoid(y=sum_ar_def, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
+    # st.write("int_sum_ar[fr=0, v0=0, phi=0, T=:]", int_sum_ar.shape)
+    # st.write(int_sum_ar[0, 0, 0, :])
 
     # Cumulative probabilities from integrals
     p0_cum = np.exp(-int_sum_ar) #if "prob" in ptypes else None  # F x V0 x PHI x T, cumulative probability that no one intercepted
@@ -172,9 +213,8 @@ def simulate_passes(
         player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis],
         p0_cum_only_def[:, np.newaxis, :, :, :], p0_cum_only_att[:, np.newaxis, :, :, :]
     ) #if "poss" in ptypes else None  # F x P x V0 x PHI x T
-
-    # st.write("p0_cum[fr=0, v0=0, phi=:, T=:]", p0_cum.shape)
-    # st.write(p0_cum[0, 0, :, :])
+    # st.write("p0_cum[fr=0, v0=0, phi=0, T=:]", p0_cum.shape)
+    # st.write(p0_cum[0, 0, 0, :])
 
     # Individual probability densities
     pr_prob = p0_cum[:, np.newaxis, :, :, :] * ar_time  # if "prob" in ptypes else None  # F x P x V0 x PHI x T
@@ -182,6 +222,8 @@ def simulate_passes(
         y=pr_prob,  # F x P x V0 x PHI x T
         x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
     )  # if add_receiver else None
+    # st.write("pr_prob[fr=0, p=:, v0=0, phi=0, T=:]", p0_cum.shape)
+    # st.write(pr_prob[0, :, 0, 0, :])
 
     pr_poss = p0_only_opp * ar_time  # if "poss" in ptypes else None  # F x P x V0 x PHI x T
     pr_cum_poss = integrate_trapezoid(  # F x P x V0 x PHI x T

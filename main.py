@@ -151,8 +151,6 @@ def main():
     df_passes["xc"] = np.nan
     df_passes["AS"] = np.nan
 
-    df_passes = df_passes
-
     # df_passes["index"] = df_passes.index
 
     ### xC
@@ -162,7 +160,21 @@ def main():
         event_player_col="tracking_player_id",
     )
 
-    df_passes = df_passes
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+    st.write("-------")
+
+    df_passes = df_passes.iloc[6:30]
 
     ### AS
     df_tracking = df_tracking[df_tracking["frame"].isin(df_passes["td_frame"])]
@@ -196,8 +208,8 @@ def main():
 
         try:
             fig = plot_expected_completion_surface(
-                simulation_result, row["result_index"], plot_type_off="poss", plot_type_def="poss", color_off=team_color,
-                color_def=def_team_color, plot_gridpoints=False
+                simulation_result, row["result_index"], plot_type_off="poss", plot_type_def=None, color_off=team_color,
+                color_def=def_team_color, plot_gridpoints=True
             )
         except NameError as e:
             pass
