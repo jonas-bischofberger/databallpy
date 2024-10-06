@@ -3,6 +3,9 @@ import sys
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
 
+import pandas as pd
+
+import sklearn.metrics
 import numpy as np
 
 import assets.test_data
@@ -10,19 +13,28 @@ import streamlit as st
 
 import dangerous_accessible_space.core
 
+DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0 = 3
+DEFAULT_FALLBACK_V0 = 10
+DEFAULT_USE_POSS_FOR_XC = True  # False
+DEFAULT_USE_FIXED_V0_FOR_XC = True
+DEFAULT_V0_MAX_FOR_XC = 15.108273248071049
+DEFAULT_V0_MIN_FOR_XC = 4.835618861117393
+DEFAULT_N_V0_FOR_XC = 6
+
+DEFAULT_N_ANGLES_FOR_DAS = 100
+DEFAULT_PHI_OFFSET = 0
+DEFAULT_N_V0_FOR_DAS = 20
+DEFAULT_V0_MIN_FOR_DAS = 0.01
+DEFAULT_V0_MAX_FOR_DAS = 30
+
 
 def get_matrix_coordinates(
-    df_tracking,
-    frame_col="frame_id",
-    player_col="player_id",
-    ball_player_id="ball",
-    team_col="team_id",
-    x_col="x",
-    y_col="y",
-    vx_col="vx",
-    vy_col="vy"
+    df_tracking, frame_col="frame_id", player_col="player_id", ball_player_id="ball", team_col="team_id",
+    controlling_team_col="ball_possession", x_col="x", y_col="y", vx_col="vx", vy_col="vy"
 ):
     """
+    Convert tracking data from a DataFrame to numpy matrices as used internally to compute the passing model.
+
     >>> assets.test_data.df_tracking
          frame_id player_id  team_id    x     y   vx    vy
     0           0         A      0.0 -0.1  0.00  0.1  0.05
@@ -39,7 +51,7 @@ def get_matrix_coordinates(
     <BLANKLINE>
     [119 rows x 7 columns]
     >>> PLAYER_POS, BALL_POS, player_list, team_indices = _get_matrix_coordinates(assets.test_data.df_tracking)
-    >>> PLAYER_POS.shape, BALL_POS.shape, player_list.shape, team_indices.shape
+    >>> PLAYER_POS.shape, BALL_POS.shape, players.shape, player_teams.shape
     ((20, 5, 4), (20, 4), (5,), (5,))
     """
     df_tracking = df_tracking.sort_values(by=[frame_col, team_col])
@@ -55,15 +67,56 @@ def get_matrix_coordinates(
 
     dfp = df_players.stack(level=1, dropna=False)
     PLAYER_POS = dfp.values.reshape(F, P, C)
+    frame_to_idx = {frame: i for i, frame in enumerate(df_players.index)}
 
-    player_list = df_players.columns.get_level_values(1).unique()  # P
+    players = df_players.columns.get_level_values(1).unique()  # P
     player2team = df_tracking.loc[i_player, [player_col, team_col]].drop_duplicates().set_index(player_col)[team_col]
-    team_indices = player2team.loc[player_list].values
+    player_teams = player2team.loc[players].values
 
     df_ball = df_tracking.loc[~i_player].set_index(frame_col)[[x_col, y_col, vx_col, vy_col]]
     BALL_POS = df_ball.values  # F x C
 
-    return PLAYER_POS, BALL_POS, player_list, team_indices
+    controlling_teams = df_tracking.groupby(frame_col)[controlling_team_col].first().values
+
+    F = PLAYER_POS.shape[0]
+    assert F == BALL_POS.shape[0]
+    assert F == controlling_teams.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but passer_team shape is {controlling_teams.shape}"
+    P = PLAYER_POS.shape[1]
+    assert P == player_teams.shape[0]
+    assert P == players.shape[0]
+    assert PLAYER_POS.shape[2] >= 4  # >= or = ?
+    assert BALL_POS.shape[1] >= 2  # ...
+
+    return PLAYER_POS, BALL_POS, players, player_teams, controlling_teams, frame_to_idx
+
+
+def per_object_frameify_tracking_data(
+        df_tracking, frame_col, x_cols, y_cols, vx_cols, vy_cols, players, player_to_team, new_x_col="x", new_y_col="y",
+        new_vx_col="vx", new_vy_col="vy", new_player_col="player_id", new_team_col="team_id", v_cols=None, new_v_col="v",
+):
+    """ Converts tracking data with '1 row per frame' into '1 row per frame + player' format """
+    dfs_player = []
+    for player_nr, player in enumerate(players):
+        coordinate_cols = [x_cols[player_nr], y_cols[player_nr], vx_cols[player_nr], vy_cols[player_nr]]
+        coordinate_mapping = {x_cols[player_nr]: new_x_col, y_cols[player_nr]: new_y_col, vx_cols[player_nr]: new_vx_col, vy_cols[player_nr]: new_vy_col}
+        if v_cols is not None:
+            coordinate_cols.append(v_cols[player_nr])
+            coordinate_mapping[v_cols[player_nr]] = new_v_col
+        df_player = df_tracking[[frame_col] + coordinate_cols]
+        df_player = df_player.rename(columns=coordinate_mapping)
+        df_player[new_player_col] = player
+        df_player[new_team_col] = player_to_team[player]
+        dfs_player.append(df_player)
+
+    df_player = pd.concat(dfs_player, axis=0)
+
+    all_coordinate_columns = x_cols + y_cols + vx_cols + vy_cols
+    if v_cols is not None:
+        all_coordinate_columns += v_cols
+
+    remaining_cols = [col for col in df_tracking.columns if col not in [frame_col] + all_coordinate_columns]
+
+    return df_player.merge(df_tracking[[frame_col] + remaining_cols], on=frame_col, how="left")
 
 
 def _get_unused_column_name(df, prefix):
@@ -75,8 +128,14 @@ def _get_unused_column_name(df, prefix):
     return new_column_name
 
 
-def get_pass_velocity(df_passes, df_tracking_ball, event_frame_col="frame_id", tracking_frame_col="frame_id", n_frames_after_pass_for_v0=5, fallback_v0=10, vx_col="vx", vy_col="vy", v_col=None):
+def get_pass_velocity(
+    df_passes, df_tracking_ball, event_frame_col="frame_id", tracking_frame_col="frame_id",
+    n_frames_after_pass_for_v0=DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0, fallback_v0=DEFAULT_FALLBACK_V0, tracking_vx_col="vx",
+    tracking_vy_col="vy", tracking_v_col=None
+):
     """
+    Add initial velocity to passes according to the first N frames of ball tracking data after the pass
+
     >>> df_passes = assets.test_data.df_passes
     >>> df_passes["v0"] = get_pass_velocity(df_passes, assets.test_data.df_tracking[assets.test_data.df_tracking["player_id"] == "ball"])
     >>> df_passes
@@ -104,10 +163,10 @@ def get_pass_velocity(df_passes, df_tracking_ball, event_frame_col="frame_id", t
     df_tracking_ball_v0 = df_tracking_ball[df_tracking_ball[tracking_frame_col].isin(all_valid_frame_list)]
     # df_tracking_ball_v0 = df_tracking_ball[df_tracking_ball[frame_col].apply(lambda x: any(start <= x <= end for start, end in zip(df_passes[frame_col], df_passes["frame_end"])))]
     df_tracking_ball_v0[pass_nr_col] = df_tracking_ball_v0[pass_nr_col].ffill()
-    if v_col is not None:
-        df_tracking_ball_v0[ball_velocity_col] = df_tracking_ball_v0[v_col]
+    if tracking_v_col is not None:
+        df_tracking_ball_v0[ball_velocity_col] = df_tracking_ball_v0[tracking_v_col]
     else:
-        df_tracking_ball_v0[ball_velocity_col] = np.sqrt(df_tracking_ball_v0[vx_col] ** 2 + df_tracking_ball_v0[vy_col] ** 2)
+        df_tracking_ball_v0[ball_velocity_col] = np.sqrt(df_tracking_ball_v0[tracking_vx_col] ** 2 + df_tracking_ball_v0[tracking_vy_col] ** 2)
 
     dfg_v0 = df_tracking_ball_v0.groupby(pass_nr_col)[ball_velocity_col].mean()
 
@@ -116,140 +175,185 @@ def get_pass_velocity(df_passes, df_tracking_ball, event_frame_col="frame_id", t
     return v0
 
 
-if __name__ == '__main__':
-    # get_matrix_coordinates(assets.test_data.df_tracking)
-    assets.test_data.df_passes["v0"] = get_pass_velocity(assets.test_data.df_passes, assets.test_data.df_tracking[assets.test_data.df_tracking["player_id"] == "ball"])
-    st.write("assets.test_data.df_passes")
-    st.write(assets.test_data.df_passes)
-
-
 def get_expected_pass_completion(
-    df_passes,
-    df_tracking,
+    df_passes, df_tracking, tracking_frame_col="frame_id", event_frame_col="frame_id",
+    tracking_player_col="player_id", tracking_team_col="team_id", ball_tracking_player_id="ball",
+    n_frames_after_pass_for_v0=5, fallback_v0=10, tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx",
+    tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
+    event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
+
+    # Parameters
+    exclude_passer=True,
+    use_poss=DEFAULT_USE_POSS_FOR_XC,
+    use_fixed_v0=DEFAULT_USE_FIXED_V0_FOR_XC,
+    v0_min=DEFAULT_V0_MIN_FOR_XC,
+    v0_max=DEFAULT_V0_MAX_FOR_XC,
+    n_v0=DEFAULT_N_V0_FOR_XC,
 ):
-    ### 1. Prepare data
-    # 1.1 Extract player positions
-    # x_cols = [col for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end"))]
-    # x_cols_players = [col for col in x_cols if "ball" not in col]
-    #
-    # coordinates = ["_x_norm", "_y_norm", "_vx_norm", "_vy_norm"]
-    #
-    # df_coords = df_tracking_passes[[f"{x_col.replace('_x_norm', coord)}" for x_col in x_cols_players for coord in coordinates]]
-    #
-    # st.write("df_coords")
-    # st.write(df_coords)
-    #
-    # F = df_coords.shape[0]  # number of frames
-    # C = len(coordinates)
-    # P = df_coords.shape[1] // len(coordinates)
-    # PLAYER_POS = df_coords.values.reshape(F, P, C)#.transpose(1, 0, 2)  # F x P x C
-    # st.write("PLAYER_POS", PLAYER_POS.shape)
-    # st.write(PLAYER_POS[0, :, :])
-    PLAYER_POS, BALL_POS, player_list, team_list = get_matrix_coordinates(df_tracking_passes)
+    df_passes = df_passes.copy()
 
-    # 1.2 Extract ball position
-    # BALL_POS = df_tracking_passes[[f"ball{coord}" for coord in coordinates]].values  # F x C
-    # st.write("BALL_POS", BALL_POS.shape)
-    # st.write(BALL_POS)
+    # 1. Extract player and ball positions at passes
+    i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
+    PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
+        df_tracking.loc[i_pass_in_tracking], frame_col=tracking_frame_col, player_col=tracking_player_col,
+        ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
+        vx_col=tracking_vx_col, vy_col=tracking_vy_col,
+    )
 
-    # 1.3 Extract v0 as mean ball_velocity of the first N frames after the pass
-    df_tracking_passes = _add_pass_velocity(df_tracking_passes, df_tracking_and_event)
+    # 2. Add v0 to passes
+    v0_col = _get_unused_column_name(df_passes, "v0")
+    df_passes[v0_col] = get_pass_velocity(
+        df_passes, df_tracking[df_tracking[tracking_player_col] == ball_tracking_player_id],
+        event_frame_col=event_frame_col, tracking_frame_col=tracking_frame_col,
+        n_frames_after_pass_for_v0=n_frames_after_pass_for_v0, fallback_v0=fallback_v0, tracking_vx_col=tracking_vx_col,
+        tracking_vy_col=tracking_vy_col, tracking_v_col=tracking_v_col
+    )
+    # v0_grid = df_passes[v0_col].values[:, np.newaxis]  # F x V0
+    if use_fixed_v0:
+        v0_grid = np.linspace(start=v0_min, stop=v0_max, num=round(n_v0))[np.newaxis, :].repeat(df_passes.shape[0], axis=0)  # F x V0
+    else:
+        v0_grid = df_passes[v0_col].values[:, np.newaxis]  # F x V0=1, only simulate actual passing speed
 
-    # df_tracking_passes["pass_nr"] = df_tracking_passes.index
-    # index = [[idx + i for i in range(n_frames_after_pass_for_v0)] for idx in df_tracking_passes.index]
-    # index = [item for sublist in index for item in sublist]
-    # df_tracking_v0 = df_tracking_and_event.loc[index]
-    # df_tracking_v0["related_pass_id"] = df_tracking_v0["pass_id"].ffill()
-    # dfg_v0 = df_tracking_v0.groupby("related_pass_id")["ball_velocity"].mean()
-    # df_tracking_passes["v0"] = df_tracking_passes["pass_id"].map(dfg_v0)
-    # df_tracking_passes["v0"] = df_tracking_passes["v0"].fillna(fallback_v0)  # Set a reasonable default if no ball data was available during the first N frames
+    # 3. Add angle to passes
+    phi_col = _get_unused_column_name(df_passes, "phi")
+    df_passes[phi_col] = np.arctan2(df_passes[event_end_y_col] - df_passes[event_start_y_col], df_passes[event_end_x_col] - df_passes[event_start_x_col])
+    phi_grid = df_passes[phi_col].values[:, np.newaxis]  # F x PHI
 
-    v0_grid = df_tracking_passes["v0"].values.repeat(30).reshape(-1, 30)  # F x V0
+    # 4. Extract player team info
+    passer_teams = df_passes[event_team_col].values  # F
+    player_teams = np.array(player_teams)  # P
+    if exclude_passer:
+        passers_to_exclude = df_passes[event_player_col].values  # F
+    else:
+        passers_to_exclude = None
 
-    # 1.4 Extract starting angle (phi)
-    df_tracking_passes["phi"] = np.arctan2(df_tracking_passes["end_y_norm"] - df_tracking_passes["start_y_norm"], df_tracking_passes["end_x_norm"] - df_tracking_passes["start_x_norm"])
+    # 5. Simulate passes to get expected completion
+    simulation_result = dangerous_accessible_space.simulate_passes(
+        PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players, passers_to_exclude=passers_to_exclude,
+    )
+    if use_poss:
+        xc = simulation_result.poss_cum_att[:, 0, -1]  # F x PHI x T ---> F
+    else:
+        xc = simulation_result.prob_cum_att[:, 0, -1]  # F x PHI x T ---> F
 
-    st.write("df_tracking_passes", df_tracking_passes.shape)
-    st.write(df_tracking_passes)
-    st.write("v0_grid", v0_grid.shape)
-    st.write(v0_grid)
+    outcomes = df_passes["outcome"].values
 
-    phi_grid = df_tracking_passes["phi"].values[:, np.newaxis]  # F x PHI
 
-    # 1.5 Extract player team info
-
-    passer_team = df_tracking_passes["team"].values  # F
-    st.write("passer_team", passer_team.shape)
-    st.write(passer_team)
-
-    ball_possession = df_tracking_passes["ball_possession"].values  # F
-    st.write("ball_possession", ball_possession.shape)
-    st.write(ball_possession)
-
-    i_not_same = passer_team != ball_possession
-
-    if i_not_same.any():
-        st.warning(f"Passer team and tracking ball possession team are not the same for {i_not_same.sum()} passes. Prefer event info.")
-
-    # player_list = [col.split("_x_norm")[0] for col in df_tracking_passes.columns if col.endswith("_x_norm") and not (col.startswith("start") or col.startswith("end") or "ball" in col)]  # P
-    # st.write("player_list", len(player_list))
-    # st.write(player_list)
-
-    # team_list = np.array(["home" if "home" in player else "away" for player in player_list])  # P
-
-    player_list = np.array(player_list)  # P
-    team_list = np.array(team_list)  # P
-
-    simulation_result = simulate_passes(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list)
-
-    xc = simulation_result.p_cum_att[:, 0, -1]  # F x PHI x T ---> F
-    df_tracking_passes["xC"] = xc
-
-    st.write("df_tracking_passes")
-    st.write(df_tracking_passes)
-
-    brier = np.mean(df_tracking_passes["outcome"] - df_tracking_passes["xC"])**2
-    logloss = sklearn.metrics.log_loss(df_tracking_passes["outcome"], df_tracking_passes["xC"])
-    average_completion_rate = np.mean(df_tracking_passes["outcome"])
-    st.write("average_completion_rate")
-    st.write(average_completion_rate)
-
-    brier_baseline = np.mean((df_tracking_passes["outcome"] - average_completion_rate)**2)
+    brier = sklearn.metrics.brier_score_loss(outcomes, xc)
+    logloss = sklearn.metrics.log_loss(outcomes, xc, labels=[0, 1])
+    average_completion = np.mean(outcomes)
+    brier_baseline = np.mean((outcomes - average_completion)**2)
+    brier_skill_score = 1 - brier / brier_baseline
 
     st.write("brier", brier)
     st.write("logloss", logloss)
-    st.write("brier_baseline", brier_baseline)
+    st.write("brier_skill_score", brier_skill_score)
+    st.write("average_completion", average_completion)
+    st.write("average_xc", np.mean(xc))
 
-    xc = df_tracking_passes["xC"]
+    idx = df_passes[event_frame_col].map(frame_to_idx),
 
-    df_tracking_passes["xC_string"] = xc.apply(lambda x: f"xC={x:.1%}")
+    return xc, idx, simulation_result
 
-    st.write("xc", xc)
+    # df_passes["xC"] = xc
 
-    for pass_nr, (pass_index, p4ss) in enumerate(df_tracking_passes.iterrows()):
-        if pass_nr < 4:
-            continue
+    # st.write("df_passes")
+    # st.write(df_passes)
 
-        fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
-        fig, ax = databallpy.visualize.plot_tracking_data(
-            match,
-            pass_index,
-            fig=fig,
-            ax=ax,
-            # events=["pass"],
-            title="First pass after the kick-off",
-            add_velocities=True,
-            variable_of_interest=df_tracking_passes.loc[pass_index, "xC_string"],
-        )
-        # st.write("p4ss")
-        # st.write(p4ss)
-        plt.arrow(
-            p4ss["start_x_norm"], p4ss["start_y_norm"], p4ss["end_x_norm"] - p4ss["start_x_norm"],
-            p4ss["end_y_norm"] - p4ss["start_y_norm"], head_width=1, head_length=1, fc='blue', ec='blue'
-        )
-        st.write(fig)
-        plt.close(fig)
+    # brier = np.mean(df_passes["outcome"] - df_passes["xC"])**2
+    # logloss = sklearn.metrics.log_loss(df_passes["outcome"], df_passes["xC"])
+    # average_completion_rate = np.mean(df_passes["outcome"])
+    # st.write("average_completion_rate")
+    # st.write(average_completion_rate)
 
-        break
+    # brier_baseline = np.mean((df_passes["outcome"] - average_completion_rate)**2)
 
-    return df_tracking_passes
+    # st.write("brier", brier)
+    # st.write("logloss", logloss)
+    # st.write("brier_baseline", brier_baseline)
+
+    # xc = df_passes["xC"]
+
+    # df_passes["xC_string"] = xc.apply(lambda x: f"xC={x:.1%}")
+
+    # st.write("xc", xc)
+
+    # for pass_nr, (pass_index, p4ss) in enumerate(df_passes.iterrows()):
+    #     fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
+    #     fig, ax = databallpy.visualize.plot_tracking_data(
+    #         match,
+    #         p4ss["frame"],
+    #         fig=fig,
+    #         ax=ax,
+    #         team_colors=["blue", "red"],
+    #         # events=["pass"],
+    #         title="First pass after the kick-off",
+    #         add_velocities=True,
+    #         variable_of_interest=df_passes.loc[pass_index, "xC_string"],
+    #     )
+    #     st.write("p4ss")
+    #     st.write(df_passes)
+    #     st.write("match.passes_df.loc[pass_index]")
+    #     st.write(match.passes_df)
+    #     plt.arrow(
+    #         p4ss["start_x"], p4ss["start_y"], p4ss["end_x"] - p4ss["start_x"],
+    #         p4ss["end_y"] - p4ss["start_y"], head_width=1, head_length=1, fc='blue', ec='blue'
+    #     )
+    #     st.write(fig)
+    #     plt.close(fig)
+    #
+    #     if pass_nr > 5:
+    #         break
+
+    # return xc
+
+
+def get_dangerous_accessible_space(
+    # Data
+    df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
+    ball_tracking_player_id="ball", tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx", tracking_vy_col="vy",
+
+    # Options
+    apply_pitch_mask_to_raw_result=False,
+
+    # Parameters
+    n_angles=DEFAULT_N_ANGLES_FOR_DAS,
+    phi_offset=DEFAULT_PHI_OFFSET,
+    n_v0=DEFAULT_N_V0_FOR_DAS,
+    v0_min=DEFAULT_V0_MIN_FOR_DAS,
+    v0_max=DEFAULT_V0_MAX_FOR_DAS,
+):
+    PLAYER_POS, BALL_POS, players, player_teams, controlling_teams, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
+        df_tracking, frame_col=tracking_frame_col, player_col=tracking_player_col,
+        ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
+        vx_col=tracking_vx_col, vy_col=tracking_vy_col,
+    )
+    F = PLAYER_POS.shape[0]
+
+    phi_grid = np.tile(np.linspace(phi_offset, 2*np.pi+phi_offset, n_angles, endpoint=False), (F, 1))  # F x PHI
+
+    v0_grid = np.tile(np.linspace(v0_min, v0_max, n_v0), (F, 1))  # F x V0
+
+    simulation_result = dangerous_accessible_space.simulate_passes_chunked(
+        PLAYER_POS, BALL_POS, phi_grid, v0_grid, controlling_teams, player_teams, players, passers_to_exclude=None,
+    )
+    if apply_pitch_mask_to_raw_result:
+        simulation_result = dangerous_accessible_space.mask_out_of_play(simulation_result)
+
+    accessible_space = dangerous_accessible_space.aggregate_surface_area(simulation_result)  # F
+    fr2AS = pd.Series(accessible_space, index=df_tracking[tracking_frame_col].unique())
+    # df_tracking["AS"] = df_tracking[tracking_frame_col].map(fr2AS)
+
+    # st.write("AS", accessible_space.shape, accessible_space)
+    # st.write("df_tracking", df_tracking.shape)
+    # st.write(df_tracking)
+    # dangerous_accessible_space = aggregate_surface_area(simulation_result_das)
+    # st.write("DAS", dangerous_accessible_space)
+    # df_passes["DAS"] = dangerous_accessible_space
+
+    accessible_space_series = df_tracking[tracking_frame_col].map(fr2AS)
+    idx = df_tracking[tracking_frame_col].map(frame_to_idx)
+
+    return accessible_space_series, idx, simulation_result
+
+    # return simulation_result
