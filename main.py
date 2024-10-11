@@ -208,7 +208,7 @@ def main():
 
         try:
             fig = plot_expected_completion_surface(
-                simulation_result, row["result_index"], plot_type_off="poss", plot_type_def=None, color_off=team_color,
+                simulation_result, row["result_index"], plot_type_off="poss", plot_type_def="poss", color_off=team_color,
                 color_def=def_team_color, plot_gridpoints=True
             )
         except NameError as e:

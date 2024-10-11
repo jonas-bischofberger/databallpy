@@ -24,7 +24,7 @@ DEFAULT_N_V0_FOR_XC = 6
 DEFAULT_N_ANGLES_FOR_DAS = 60
 DEFAULT_PHI_OFFSET = 0
 DEFAULT_N_V0_FOR_DAS = 20
-DEFAULT_V0_MIN_FOR_DAS = 15#0.01
+DEFAULT_V0_MIN_FOR_DAS = 3#0.01
 DEFAULT_V0_MAX_FOR_DAS = 30
 
 
@@ -232,7 +232,9 @@ def get_expected_pass_completion(
         PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players, passers_to_exclude=passers_to_exclude,
     )
     if use_poss:
-        xc = simulation_result.poss_cum_att[:, 0, -1]  # F x PHI x T ---> F
+        xc = np.max(simulation_result.poss_density_att[:, 0, :], axis=1) * (simulation_result.r_grid[1] - simulation_result.r_grid[0])
+        st.write("xc")
+        st.write(xc)
     else:
         xc = simulation_result.prob_cum_att[:, 0, -1]  # F x PHI x T ---> F
 

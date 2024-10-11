@@ -83,7 +83,7 @@ DEFAULT_V_MAX = 12.865546440947865
 DEFAULT_USE_MAX = True
 DEFAULT_USE_APPROX_TWO_POINT = False #True
 DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
-DEFAULT_RADIAL_GRIDSIZE = 5
+DEFAULT_RADIAL_GRIDSIZE = 3
 #
 
 def sigmoid(x):
@@ -169,29 +169,36 @@ def simulate_passes(
         TTA_PLAYERS[i_frames, i_passers_to_exclude, :, :] = np.inf  # F x P x PHI x T
 
     TTA_PLAYERS = np.nan_to_num(TTA_PLAYERS, nan=np.inf)  # Handle players not participating in the game by setting their TTA to infinity
-    st.write("T_BALL_SIM[fr=0, PHI=0, T=:]", T_BALL_SIM.shape)
-    st.write(T_BALL_SIM[0, 0, :])
-    st.write("TTA_PLAYERS[fr=0, P=:, PHI=0, T=:]", TTA_PLAYERS.shape)
-    st.write(TTA_PLAYERS[0, :, 0, :])
+    # st.write("T_BALL_SIM[fr=0, PHI=0, T=:]", T_BALL_SIM.shape)
+    # st.write(T_BALL_SIM[0, 0, :])
+    # st.write("TTA_PLAYERS[fr=0, P=:, PHI=0, T=:]", TTA_PLAYERS.shape)
+    # st.write(TTA_PLAYERS[0, :, 0, :])
 
     # 2.2 Transform time to arrive into interception rates
+    seconds_to_intercept = 15
     X = TTA_PLAYERS[:, :, np.newaxis, :, :] - T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x P x PHI x T - F x PHI x T = F x P x V0 x PHI x T
-    st.write("X[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
-    st.write(X[0, :, 0, 0, :])
+    # TIME_TO_CONTROL = np.maximum(0, (1 - np.exp(seconds_to_intercept * X)))  # F x P x V0 x PHI x T
+    # st.write("X[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
+    # st.write(X[0, :, 0, 0, :])
     X[:] = b0 + b1 * X  # 1 + 1 * F x P x V0 x PHI x T = F x P x V0 x PHI x T
     X[:] = sigmoid(X)
     X = np.nan_to_num(X, nan=0)  # F x P x V0 x PHI x T
-    st.write("X(sigmoid)[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
-    st.write(X[0, :, 0, 0, :])
-    st.write("seconds_to_intercept", seconds_to_intercept)
+    # TIME_TO_CONTROL = np.nan_to_num(TIME_TO_CONTROL, nan=0)  # F x P x V0 x PHI x T
+    # st.write("TIME_TO_CONTROL[fr=0, P=:, V0=0, PHI=0, T=:]", TIME_TO_CONTROL.shape)
+    # st.write(TIME_TO_CONTROL[0, :, 0, 0, :])
+    X = X #* TIME_TO_CONTROL
+
+    # st.write("X(sigmoid)[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
+    # st.write(X[0, :, 0, 0, :])
+    # st.write("seconds_to_intercept", seconds_to_intercept)
     # ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
     # ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
     # st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape, ar_time.min(), ar_time.mean(), ar_time.max())
     # st.write(ar_time[0, :, 0, 0, :])
     DT = T_BALL_SIM[:, :, 1] - T_BALL_SIM[:, :, 0]  # F x V0
     ar_time = X / DT[:, np.newaxis, :, np.newaxis, np.newaxis]  # F x P x V0 x PHI x T
-    st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape, ar_time.min(), ar_time.mean(), ar_time.max())
-    st.write(ar_time[0, :, 0, 0, :])
+    # st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape, ar_time.min(), ar_time.mean(), ar_time.max())
+    # st.write(ar_time[0, :, 0, 0, :])
 
     # st.write("DT", DT.shape, DT)
     # ar_space = ar_time * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / radial_gridsize  # F x P x V0 x PHI x T
@@ -202,8 +209,8 @@ def simulate_passes(
     ## 3. Use interception rates to calculate probabilities
     # 3.1 Sums of interception rates over players
     sum_ar = np.nansum(ar_time, axis=1)  # F x V0 x PHI x T
-    st.write("sum_ar[fr=0, v0=0, phi=0, T=:]", sum_ar.shape)
-    st.write(sum_ar[0, 0, 0, :])
+    # st.write("sum_ar[fr=0, v0=0, phi=0, T=:]", sum_ar.shape)
+    # st.write(sum_ar[0, 0, 0, :])
 
     # poss-specific
     player_is_attacking = player_teams[np.newaxis, :] == passer_teams[:, np.newaxis]  # F x P
@@ -216,8 +223,8 @@ def simulate_passes(
     int_sum_ar = integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
     int_sum_ar_att = integrate_trapezoid(y=sum_ar_att, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
     int_sum_ar_def = integrate_trapezoid(y=sum_ar_def, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    st.write("int_sum_ar[fr=0, v0=0, phi=0, T=:]", int_sum_ar.shape)
-    st.write(int_sum_ar[0, 0, 0, :])
+    # st.write("int_sum_ar[fr=0, v0=0, phi=0, T=:]", int_sum_ar.shape)
+    # st.write(int_sum_ar[0, 0, 0, :])
 
     # Cumulative probabilities from integrals
     p0_cum = np.exp(-int_sum_ar) #if "prob" in ptypes else None  # F x V0 x PHI x T, cumulative probability that no one intercepted
@@ -227,14 +234,14 @@ def simulate_passes(
         player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis],
         p0_cum_only_def[:, np.newaxis, :, :, :], p0_cum_only_att[:, np.newaxis, :, :, :]
     ) #if "poss" in ptypes else None  # F x P x V0 x PHI x T
-    st.write("p0_cum[fr=0, v0=0, phi=0, T=:]", p0_cum.shape)
-    st.write(p0_cum[0, 0, 0, :])
+    # st.write("p0_cum[fr=0, v0=0, phi=0, T=:]", p0_cum.shape)
+    # st.write(p0_cum[0, 0, 0, :])
     # st.write("p0_cum_only_att[fr=0, v0=0, phi=0, T=:]", p0_cum_only_att.shape)
     # st.write(p0_cum_only_att[0, 0, 0, :])
     # st.write("p0_cum_only_def[fr=0, v0=0, phi=0, T=:]", p0_cum_only_def.shape)
     # st.write(p0_cum_only_def[0, 0, 0, :])
-    st.write("p0_only_opp[fr=0, p=:, v0=0, phi=0, T=:]", p0_only_opp.shape)
-    st.write(p0_only_opp[0, :, 0, 0, :])
+    # st.write("p0_only_opp[fr=0, p=:, v0=0, phi=0, T=:]", p0_only_opp.shape)
+    # st.write(p0_only_opp[0, :, 0, 0, :])
 
     # Individual probability densities
     dpr_over_dt = p0_cum[:, np.newaxis, :, :, :] * ar_time  # if "prob" in ptypes else None  # F x P x V0 x PHI x T
@@ -242,14 +249,6 @@ def simulate_passes(
         y=dpr_over_dt,  # F x P x V0 x PHI x T
         x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
     )  # if add_receiver else None
-    # st.write("pr_prob[fr=0, p=:, v0=0, phi=0, T=:]", pr_prob.shape, np.min(pr_prob), np.max(pr_prob))
-    # st.write(pr_prob[0, :, 0, 0, :])
-    # st.write("pr_cum_prob[fr=0, p=:, v0=0, phi=0, T=:]", pr_cum_prob.shape, np.min(pr_cum_prob), np.max(pr_cum_prob))
-    # st.write(pr_cum_prob[0, :, 0, 0, :])
-    # st.write("--> sum", pr_cum_prob[0, :, 0, -1].sum())
-    # st.write("--> sum p0", p0_cum[0, :, 0, -1].sum())
-    # norm_sum = pr_cum_prob.sum(axis=1)
-    # st.write("norm_sum", norm_sum.shape, np.min(norm_sum), np.max(norm_sum))
 
     dpr_poss_over_dt = p0_only_opp * ar_time  # if "poss" in ptypes else None  # F x P x V0 x PHI x T
     pr_cum_poss = integrate_trapezoid(  # F x P x V0 x PHI x T
@@ -257,32 +256,46 @@ def simulate_passes(
         x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
     )  # if add_receiver else None
 
+    dp0_over_dt = -p0_cum * sum_ar  # F x V0 x PHI x T
+
+    # Go from dt -> dx
+    DX = D_BALL_SIM[1] - D_BALL_SIM[0]
+    dpr_over_dx = dpr_over_dt * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / DX  # F x P x V0 x PHI x T
+    dpr_poss_over_dx = dpr_poss_over_dt * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / DX  # F x P x V0 x PHI x T
+    dp0_over_dx = dp0_over_dt * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / DX
+
     # Aggregate over v0
-    # TODO use probability distribution. Bei prob auch phi-aggregation nötig -> ggf komplizierte Kombinationen...
-    st.write("dpr_over_dt", dpr_over_dt.shape)
-    dpr_over_dx_vagg_prob = np.average(dpr_over_dt, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T
-    dpr_over_dx_vagg_poss = np.max(dpr_poss_over_dt, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
+    # dpr_over_dx_vagg_prob = np.average(dpr_over_dt, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T, Take the average over all V0 in v0_grid
+    dpr_over_dx_vagg_prob = np.average(dpr_over_dx, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T, Take the average over all V0 in v0_grid
+    # dpr_over_dx_vagg_poss = np.max(dpr_poss_over_dt, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
+    dpr_over_dx_vagg_poss = np.max(dpr_poss_over_dx, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
+    dp0_over_dx_vagg = np.average(dp0_over_dx, axis=1)  # F x PHI x T
+
+    # Normalize 3/4: poss density
+    dpr_over_dx_vagg_poss_times_dx = dpr_over_dx_vagg_poss * DX  # F x P x PHI x T
+    num_max = np.max(dpr_over_dx_vagg_poss_times_dx, axis=(1, 3))  # F
+    dpr_over_dx_vagg_poss = dpr_over_dx_vagg_poss / num_max[:, np.newaxis, :, np.newaxis]
+    # st.write("dpr_over_dx_vagg_poss", dpr_over_dx_vagg_poss.shape, np.min(dpr_over_dx_vagg_poss), np.max(dpr_over_dx_vagg_poss))
+
+    # Normalize 2/4: prob density
+    dpr_over_dx_vagg_prob_sum = np.sum(dpr_over_dx_vagg_prob * radial_gridsize, axis=(1, 3))  # F x PHI
+    dpr_over_dx_vagg_prob = dpr_over_dx_vagg_prob / dpr_over_dx_vagg_prob_sum[:, np.newaxis, :, np.newaxis]  # F x P x PHI x T
 
     p0_cum_vagg = np.mean(p0_cum, axis=1)  # if add_receiver else None  # F x PHI x T
     pr_cum_prob_vagg = np.mean(pr_cum_prob, axis=2)  # if add_receiver else None  # F x P x PHI x T
     pr_cum_poss_vagg = np.max(pr_cum_poss, axis=2)  # if add_receiver else None  # F x P x V0 x PHI x T -> F x P x V0 x PHI x T
-    st.write("pr_cum_prob_vagg", pr_cum_prob_vagg.shape, np.max(pr_cum_prob_vagg))
-    st.write(pr_cum_prob_vagg[0, :, 0, :])
-    # st.write("--> sum", pr_cum_prob_vagg[0, :, 0, -1].sum())
-    # st.write("--> sum p0", p0_cum[0, :, 0, -1].sum())
+    # st.write("pr_cum_prob_vagg", pr_cum_prob_vagg.shape, np.max(pr_cum_prob_vagg))
+    # st.write(pr_cum_prob_vagg[0, :, 0, :])
 
     # pr_cum_prob_vagg = np.minimum(pr_cum_prob_vagg, 1)
     # pr_cum_poss_vagg = np.minimum(pr_cum_poss_vagg, 1)
     # dpr_over_dx_vagg_prob = np.minimum(dpr_over_dx_vagg_prob, 1/radial_gridsize)
     # dpr_over_dx_vagg_poss = np.minimum(dpr_over_dx_vagg_poss, 1/radial_gridsize)
 
-    dpr_over_dx_vagg_att_poss = np.nanmax(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_poss, 0), axis=1)  #if add_receiver else None  # F x PHI x T
-    dpr_over_dx_vagg_def_poss = np.nanmax(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_poss, 0), axis=1)  #if add_receiver else None  # F x PHI x T
     dpr_over_dx_vagg_att_prob = np.nanmax(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_prob, 0), axis=1)  # F x PHI x T
     dpr_over_dx_vagg_def_prob = np.nanmax(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_prob, 0), axis=1)  # F x PHI x T
-
-    # st.write("dpr_over_dx_vagg_att_poss[fr=:, PHI=0, T=:]", dpr_over_dx_vagg_att_poss.shape)
-    # st.write(dpr_over_dx_vagg_att_poss[:, 0, :])
+    dpr_over_dx_vagg_att_poss = np.nanmax(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_poss, 0), axis=1)  #if add_receiver else None  # F x PHI x T
+    dpr_over_dx_vagg_def_poss = np.nanmax(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_poss, 0), axis=1)  #if add_receiver else None  # F x PHI x T
 
     pr_cum_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_prob_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
     pr_cum_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_prob_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
@@ -297,40 +310,40 @@ def simulate_passes(
     # dpr_over_dx_vagg_def_poss[..., 0] = 1 / radial_gridsize
     # dpr_over_dx_vagg_def_prob[..., 0] = 1 / radial_gridsize
 
-    # st.write("pr_cum_poss_att", pr_cum_poss_att.shape, np.min(pr_cum_poss_att), np.max(pr_cum_poss_att))
-    # st.write("pr_cum_poss_def", pr_cum_poss_def.shape, np.min(pr_cum_poss_def), np.max(pr_cum_poss_def))
-    st.write("pr_cum_att", pr_cum_att.shape, np.max(pr_cum_att))
-    st.write("pr_cum_def", pr_cum_def.shape, np.max(pr_cum_def))
-
-    st.write("pr_cum_att_final", pr_cum_att[:, :, -1])
-    st.write("pr_cum_def_final", pr_cum_def[:, :, -1])
-    st.write("p0_cum_vagg_final", p0_cum_vagg[:, :, -1])
-
     # normalize 1/4: prob cum
     p_sum = pr_cum_att + pr_cum_def + p0_cum_vagg
-    st.write("p_sum", p_sum.shape)
-    st.write("p_sum_final", p_sum[:, :, -1])
     pr_cum_att = pr_cum_att / p_sum
     pr_cum_def = pr_cum_def / p_sum
-    # p0_cum_vagg = p0_cum_vagg / p_sum
-    # p_sum = pr_cum_att + pr_cum_def + p0_cum_vagg
-    # st.write("p_sum", p_sum.shape)
-    # st.write("p_sum_final", p_sum[:, :, -1])
+
+    # normalize 3/4: poss cum
 
     # st.write("dpr_over_dx_vagg_att_poss", dpr_over_dx_vagg_att_poss.shape, np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
     # st.write("dpr_over_dx_vagg_def_poss", dpr_over_dx_vagg_def_poss.shape, np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
     # st.write("dpr_over_dx_vagg_att_prob", dpr_over_dx_vagg_att_prob.shape, np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
     # st.write("dpr_over_dx_vagg_def_prob", dpr_over_dx_vagg_def_prob.shape, np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
 
+    pr_cum_poss_att_max = np.maximum.accumulate(dpr_over_dx_vagg_att_poss, axis=2) * radial_gridsize  # possibility CDF uses cummax instead of cumsum to emerge from PDF
+    pr_cum_poss_def_max = np.maximum.accumulate(dpr_over_dx_vagg_def_poss, axis=2) * radial_gridsize
+
+    # st.write("poss_cum_att", np.min(pr_cum_poss_att_max), np.max(pr_cum_poss_att_max))
+    # st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
+    # st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
+    # st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
+    # st.write("poss_cum_def", np.min(pr_cum_poss_def_max), np.max(pr_cum_poss_def_max))
+    # st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
+    # st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
+    # st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
+
     result = Result(
-        poss_cum_att=pr_cum_poss_att,
-        prob_cum_att=pr_cum_att,
+        poss_cum_att=pr_cum_poss_att_max,  # F x PHI x T
+        prob_cum_att=pr_cum_att,  # F x PHI x T
         poss_density_att=dpr_over_dx_vagg_att_poss,  # F x PHI x T
         prob_density_att=dpr_over_dx_vagg_att_prob,  # F x PHI x T
-        poss_cum_def=pr_cum_poss_def,
-        prob_cum_def=pr_cum_def,
+        poss_cum_def=pr_cum_poss_def_max,  #pr_cum_poss_def,  # F x PHI x T
+        prob_cum_def=pr_cum_def,  # F x PHI x T
         poss_density_def=dpr_over_dx_vagg_def_poss,  # F x PHI x T
         prob_density_def=dpr_over_dx_vagg_def_prob,  # F x PHI x T
+
         phi_grid=phi_grid, r_grid=D_BALL_SIM, x_grid=X_BALL_SIM, y_grid=Y_BALL_SIM
     )
 
