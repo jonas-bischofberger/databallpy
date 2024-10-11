@@ -182,13 +182,29 @@ def get_expected_pass_completion(
     tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
 
-    # Parameters
+    # xC Parameters
     exclude_passer=True,
     use_poss=DEFAULT_USE_POSS_FOR_XC,
     use_fixed_v0=DEFAULT_USE_FIXED_V0_FOR_XC,
     v0_min=DEFAULT_V0_MIN_FOR_XC,
     v0_max=DEFAULT_V0_MAX_FOR_XC,
     n_v0=DEFAULT_N_V0_FOR_XC,
+
+    # Core model parameters
+    pass_start_location_offset=dangerous_accessible_space.DEFAULT_PASS_START_LOCATION_OFFSET,
+    time_offset_ball=dangerous_accessible_space.DEFAULT_TIME_OFFSET_BALL,
+    radial_gridsize=dangerous_accessible_space.DEFAULT_RADIAL_GRIDSIZE,
+    # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
+    b0=dangerous_accessible_space.DEFAULT_B0,
+    b1=dangerous_accessible_space.DEFAULT_B1,
+    player_velocity=dangerous_accessible_space.DEFAULT_PLAYER_VELOCITY,
+    keep_inertial_velocity=dangerous_accessible_space.DEFAULT_KEEP_INERTIAL_VELOCITY,
+    use_max=dangerous_accessible_space.DEFAULT_USE_MAX,
+    v_max=dangerous_accessible_space.DEFAULT_V_MAX,
+    a_max=dangerous_accessible_space.DEFAULT_A_MAX,
+    inertial_seconds=dangerous_accessible_space.DEFAULT_INERTIAL_SECONDS,
+    tol_distance=dangerous_accessible_space.DEFAULT_TOL_DISTANCE,
+    use_approx_two_point=dangerous_accessible_space.DEFAULT_USE_APPROX_TWO_POINT,
 ):
     df_passes = df_passes.copy()
 
@@ -229,17 +245,31 @@ def get_expected_pass_completion(
 
     # 5. Simulate passes to get expected completion
     simulation_result = dangerous_accessible_space.simulate_passes(
-        PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players, passers_to_exclude=passers_to_exclude,
+        # xC parameters
+        PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players,
+        passers_to_exclude=passers_to_exclude,
+
+        # Core model parameters
+        pass_start_location_offset=pass_start_location_offset,
+        time_offset_ball=time_offset_ball,
+        radial_gridsize=radial_gridsize,
+        b0=b0,
+        b1=b1,
+        player_velocity=player_velocity,
+        keep_inertial_velocity=keep_inertial_velocity,
+        use_max=use_max,
+        v_max=v_max,
+        a_max=a_max,
+        inertial_seconds=inertial_seconds,
+        tol_distance=tol_distance,
+        use_approx_two_point=use_approx_two_point,
     )
     if use_poss:
-        xc = np.max(simulation_result.poss_density_att[:, 0, :], axis=1) * (simulation_result.r_grid[1] - simulation_result.r_grid[0])
-        st.write("xc")
-        st.write(xc)
+        xc = simulation_result.poss_cum_att[:, 0, -1]  # F x PHI x T ---> F
     else:
         xc = simulation_result.prob_cum_att[:, 0, -1]  # F x PHI x T ---> F
 
     outcomes = df_passes["outcome"].values
-
 
     brier = sklearn.metrics.brier_score_loss(outcomes, xc)
     logloss = sklearn.metrics.log_loss(outcomes, xc, labels=[0, 1])
@@ -247,11 +277,11 @@ def get_expected_pass_completion(
     brier_baseline = np.mean((outcomes - average_completion)**2)
     brier_skill_score = 1 - brier / brier_baseline
 
-    st.write("brier", brier)
-    st.write("logloss", logloss)
-    st.write("brier_skill_score", brier_skill_score)
-    st.write("average_completion", average_completion)
-    st.write("average_xc", np.mean(xc))
+    # st.write("brier", brier)
+    # st.write("logloss", logloss)
+    # st.write("brier_skill_score", brier_skill_score)
+    # st.write("average_completion", average_completion)
+    # st.write("average_xc", np.mean(xc))
 
     idx = df_passes[event_frame_col].map(frame_to_idx),
 

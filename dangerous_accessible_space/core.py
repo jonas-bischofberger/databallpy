@@ -1,5 +1,4 @@
 import numpy as np
-import pandas as pd
 import streamlit as st
 import math
 import scipy.integrate
@@ -72,9 +71,9 @@ Result = collections.namedtuple("Result", _result_fields, defaults=[None] * len(
 
 DEFAULT_B0 = -1.3075312012275244
 DEFAULT_B1 = -65.57184250749606
-DEFAULT_PASS_START_LOCATION_OFFSET = 0#0.2821895970952328
-DEFAULT_TIME_OFFSET_BALL = 0#-0.09680365586691105
-DEFAULT_SECONDS_TO_INTERCEPT = 1.1650841463114299
+DEFAULT_PASS_START_LOCATION_OFFSET = 0.2821895970952328
+DEFAULT_TIME_OFFSET_BALL = -0.09680365586691105
+# DEFAULT_SECONDS_TO_INTERCEPT = 1.1650841463114299
 DEFAULT_TOL_DISTANCE = 2.5714050933456036
 DEFAULT_PLAYER_VELOCITY = 3.984451038279267
 DEFAULT_KEEP_INERTIAL_VELOCITY = True
@@ -84,6 +83,81 @@ DEFAULT_USE_MAX = True
 DEFAULT_USE_APPROX_TWO_POINT = False #True
 DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
 DEFAULT_RADIAL_GRIDSIZE = 3
+
+
+#     pass_start_location_offset=DEFAULT_PASS_START_LOCATION_OFFSET,
+#     time_offset_ball=DEFAULT_TIME_OFFSET_BALL,
+#     radial_gridsize=DEFAULT_RADIAL_GRIDSIZE,
+#     # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
+#     b0=DEFAULT_B0,
+#     b1=DEFAULT_B1,
+#     player_velocity=DEFAULT_PLAYER_VELOCITY,
+#     keep_inertial_velocity=DEFAULT_KEEP_INERTIAL_VELOCITY,
+#     use_max=DEFAULT_USE_MAX,
+#     v_max=DEFAULT_V_MAX,
+#     a_max=DEFAULT_A_MAX,
+#     inertial_seconds=DEFAULT_INERTIAL_SECONDS,
+#     tol_distance=DEFAULT_TOL_DISTANCE,
+#     use_approx_two_point=DEFAULT_USE_APPROX_TWO_POINT,
+
+#     exclude_passer=True,
+#     use_poss=DEFAULT_USE_POSS_FOR_XC,
+#     use_fixed_v0=DEFAULT_USE_FIXED_V0_FOR_XC,
+#     v0_min=DEFAULT_V0_MIN_FOR_XC,
+#     v0_max=DEFAULT_V0_MAX_FOR_XC,
+#     n_v0=DEFAULT_N_V0_FOR_XC,
+PARAMETER_BOUNDS = {
+    # Core model
+    "pass_start_location_offset": [0.001, 1],
+    "time_offset_ball": [-0.0001, 0.0001],
+    "radial_gridsize": [4.99, 5.01],
+    "b0": [-10, 5],
+    "b1": [-200, 0],
+    "player_velocity": [2, 35],
+    "keep_inertial_velocity": [False, True],  # , False],
+    "use_max": [False, True],
+    "v_max": [5, 40],
+    "a_max": [10, 30],
+    "inertial_seconds": [0.0, 1.5],  # , True],
+    "tol_distance": [0, 7],
+    "use_approx_two_point": [False, True],
+
+    # "t_max": [0.01, 20],
+    # "d_max": [1, 10],
+
+    # "int_prob_mode": [False, True],
+    # "seconds_to_intercept": [0.01, 5.5],
+    # "tol_distance": [0, 20],
+    # "inflation": [0.01, 100],
+    # "use_inflation": [False],
+
+    # "dummy": [1, 10],
+
+    # "require_specific_receiver": [False],  # , True],#[False, True],  # , True],#, True],
+
+    # "use_const_v": [False],  # , True],  # [False, True],
+    # "int_prob_mode": [False, True],  #, True],
+    # "int_prob_mode": ["sigmoid"],  # ["sigmoid"],# "step", "expit"],  #, True],
+    # "use_ramp": [False],  # , True],#, True],  #, True],
+
+    # "mean_aggregation": [False, True],
+    # "n_angles": [0.51, 7.49],
+
+    # "dummy_variable": ["hallo"],
+    # "b_over_m": [0, 0.05],
+    # "recalibration_method": ["sigmoid", None],
+    # "recalibration_method": [""],
+
+    # xC
+    "exclude_passer": [False, True],
+    "use_poss": [False, True],  # , True],#, True],
+    "use_fixed_v0": [False, True],
+    "v0_min": [1, 9.999],
+    "v0_max": [5, 30],
+    "n_v0": [0.5, 9.5],
+}
+
+
 #
 
 def sigmoid(x):
@@ -109,7 +183,7 @@ def simulate_passes(
     pass_start_location_offset=DEFAULT_PASS_START_LOCATION_OFFSET,
     time_offset_ball=DEFAULT_TIME_OFFSET_BALL,
     radial_gridsize=DEFAULT_RADIAL_GRIDSIZE,
-    seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
+    # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
     b0=DEFAULT_B0,
     b1=DEFAULT_B1,
     player_velocity=DEFAULT_PLAYER_VELOCITY,
@@ -175,7 +249,7 @@ def simulate_passes(
     # st.write(TTA_PLAYERS[0, :, 0, :])
 
     # 2.2 Transform time to arrive into interception rates
-    seconds_to_intercept = 15
+    # seconds_to_intercept = 15
     X = TTA_PLAYERS[:, :, np.newaxis, :, :] - T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x P x PHI x T - F x PHI x T = F x P x V0 x PHI x T
     # TIME_TO_CONTROL = np.maximum(0, (1 - np.exp(seconds_to_intercept * X)))  # F x P x V0 x PHI x T
     # st.write("X[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
@@ -299,8 +373,8 @@ def simulate_passes(
 
     pr_cum_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_prob_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
     pr_cum_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_prob_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-    pr_cum_poss_att = np.nanmax(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_poss_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
-    pr_cum_poss_def = np.nanmax(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], pr_cum_poss_vagg, 0), axis=1) #if add_receiver else None  # F x PHI x T
+    pr_cum_poss_att = np.maximum.accumulate(dpr_over_dx_vagg_att_poss, axis=2) * radial_gridsize  # possibility CDF uses cummax instead of cumsum to emerge from PDF
+    pr_cum_poss_def = np.maximum.accumulate(dpr_over_dx_vagg_def_poss, axis=2) * radial_gridsize
 
     # pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
     # pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
@@ -316,30 +390,29 @@ def simulate_passes(
     pr_cum_def = pr_cum_def / p_sum
 
     # normalize 3/4: poss cum
+    pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
+    pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
 
     # st.write("dpr_over_dx_vagg_att_poss", dpr_over_dx_vagg_att_poss.shape, np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
     # st.write("dpr_over_dx_vagg_def_poss", dpr_over_dx_vagg_def_poss.shape, np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
     # st.write("dpr_over_dx_vagg_att_prob", dpr_over_dx_vagg_att_prob.shape, np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
     # st.write("dpr_over_dx_vagg_def_prob", dpr_over_dx_vagg_def_prob.shape, np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
 
-    pr_cum_poss_att_max = np.maximum.accumulate(dpr_over_dx_vagg_att_poss, axis=2) * radial_gridsize  # possibility CDF uses cummax instead of cumsum to emerge from PDF
-    pr_cum_poss_def_max = np.maximum.accumulate(dpr_over_dx_vagg_def_poss, axis=2) * radial_gridsize
-
-    # st.write("poss_cum_att", np.min(pr_cum_poss_att_max), np.max(pr_cum_poss_att_max))
-    # st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
-    # st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
-    # st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
-    # st.write("poss_cum_def", np.min(pr_cum_poss_def_max), np.max(pr_cum_poss_def_max))
-    # st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
-    # st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
-    # st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
+    st.write("poss_cum_att", np.min(pr_cum_poss_att), np.max(pr_cum_poss_att))
+    st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
+    st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
+    st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
+    st.write("poss_cum_def", np.min(pr_cum_poss_def), np.max(pr_cum_poss_def))
+    st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
+    st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
+    st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
 
     result = Result(
-        poss_cum_att=pr_cum_poss_att_max,  # F x PHI x T
+        poss_cum_att=pr_cum_poss_att,  # F x PHI x T
         prob_cum_att=pr_cum_att,  # F x PHI x T
         poss_density_att=dpr_over_dx_vagg_att_poss,  # F x PHI x T
         prob_density_att=dpr_over_dx_vagg_att_prob,  # F x PHI x T
-        poss_cum_def=pr_cum_poss_def_max,  #pr_cum_poss_def,  # F x PHI x T
+        poss_cum_def=pr_cum_poss_def,  #pr_cum_poss_def,  # F x PHI x T
         prob_cum_def=pr_cum_def,  # F x PHI x T
         poss_density_def=dpr_over_dx_vagg_def_poss,  # F x PHI x T
         prob_density_def=dpr_over_dx_vagg_def_prob,  # F x PHI x T

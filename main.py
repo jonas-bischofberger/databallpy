@@ -1,4 +1,6 @@
 import streamlit_profiler
+import tqdm
+
 profiler = streamlit_profiler.Profiler()
 profiler.start()
 
@@ -143,7 +145,54 @@ def _get_preprocessed_data():
     return match, df_tracking, df_events
 
 
+def validate(n_steps=100):
+    match, df_tracking, df_event = _get_preprocessed_data()
+    df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
+
+    def _choose_random_parameters(parameter_to_bounds):
+        random_parameters = {}
+        for param, bounds in parameter_to_bounds.items():
+            # st.write("B", param, bounds, str(type(bounds[0])), str(type(bounds[-1])), "bool", isinstance(bounds[0], bool), isinstance(bounds[0], int), isinstance(bounds[0], float))
+            if isinstance(bounds[0], bool):  # order matters, bc bool is also int
+                random_parameters[param] = np.random.choice([bounds[0], bounds[-1]])
+            elif isinstance(bounds[0], int) or isinstance(bounds[0], float):
+                random_parameters[param] = np.random.uniform(bounds[0], bounds[-1])
+            else:
+                raise NotImplementedError(f"Unknown type: {type(bounds[0])}")
+        return random_parameters
+
+    data = {
+        "brier": [],
+        "logloss": [],
+        "parameters": [],
+    }
+    progress_bar_text = st.empty()
+    progress_bar = st.progress(0)
+    for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
+        progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
+        progress_bar.progress((i+1) / n_steps)
+        random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
+        xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
+            df_passes, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
+            event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
+            event_player_col="tracking_player_id",
+            **random_paramter_assignment,
+        )
+        brier = sklearn.metrics.brier_score_loss(df_passes["outcome"], xc)
+        logloss = sklearn.metrics.log_loss(df_passes["outcome"], xc)
+        data["brier"].append(brier)
+        data["logloss"].append(logloss)
+        data["parameters"].append(random_paramter_assignment)
+
+    df = pd.DataFrame(data)
+    st.write("df")
+    st.write(df)
+
+
 def main():
+    validate()
+    return
+
     match, df_tracking, df_event = _get_preprocessed_data()
 
     df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
