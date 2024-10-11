@@ -398,14 +398,14 @@ def simulate_passes(
     # st.write("dpr_over_dx_vagg_att_prob", dpr_over_dx_vagg_att_prob.shape, np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
     # st.write("dpr_over_dx_vagg_def_prob", dpr_over_dx_vagg_def_prob.shape, np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
 
-    st.write("poss_cum_att", np.min(pr_cum_poss_att), np.max(pr_cum_poss_att))
-    st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
-    st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
-    st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
-    st.write("poss_cum_def", np.min(pr_cum_poss_def), np.max(pr_cum_poss_def))
-    st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
-    st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
-    st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
+    # st.write("poss_cum_att", np.min(pr_cum_poss_att), np.max(pr_cum_poss_att))
+    # st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
+    # st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
+    # st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
+    # st.write("poss_cum_def", np.min(pr_cum_poss_def), np.max(pr_cum_poss_def))
+    # st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
+    # st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
+    # st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
 
     result = Result(
         poss_cum_att=pr_cum_poss_att,  # F x PHI x T

@@ -20,6 +20,7 @@ import sklearn.metrics
 import colorsys
 
 import matplotlib.pyplot as plt
+import sklearn.model_selection
 
 import dangerous_accessible_space
 
@@ -145,9 +146,15 @@ def _get_preprocessed_data():
     return match, df_tracking, df_events
 
 
-def validate(n_steps=100):
+def validate(n_steps=100, training_size=0.99):
     match, df_tracking, df_event = _get_preprocessed_data()
     df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
+
+    random_state = 1893
+    df_training, df_test = sklearn.model_selection.train_test_split(df_passes, train_size=training_size, random_state=random_state)
+
+    df_training = df_passes
+    df_test = df_passes
 
     def _choose_random_parameters(parameter_to_bounds):
         random_parameters = {}
@@ -164,29 +171,54 @@ def validate(n_steps=100):
     data = {
         "brier": [],
         "logloss": [],
+        "auc": [],
         "parameters": [],
     }
     progress_bar_text = st.empty()
     progress_bar = st.progress(0)
+    display_df = st.empty()
     for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
         progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
         progress_bar.progress((i+1) / n_steps)
         random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
         xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
-            df_passes, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
+            df_training, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
             event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
             event_player_col="tracking_player_id",
             **random_paramter_assignment,
         )
-        brier = sklearn.metrics.brier_score_loss(df_passes["outcome"], xc)
-        logloss = sklearn.metrics.log_loss(df_passes["outcome"], xc)
+        brier = sklearn.metrics.brier_score_loss(df_training["outcome"], xc)
+        logloss = sklearn.metrics.log_loss(df_training["outcome"], xc)
+        auc = sklearn.metrics.roc_auc_score(df_training["outcome"], xc)
         data["brier"].append(brier)
         data["logloss"].append(logloss)
+        data["auc"].append(auc)
         data["parameters"].append(random_paramter_assignment)
+        display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
 
-    df = pd.DataFrame(data)
-    st.write("df")
-    st.write(df)
+    df_training_results = pd.DataFrame(data)
+    st.write("df_training_results")
+    st.write(df_training_results)
+
+    best_index = df_training_results["logloss"].idxmin()
+    best_parameters = df_training_results["parameters"][best_index]
+    st.write("Best parameters")
+    st.write(best_parameters)
+
+    xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
+        df_test, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
+        event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
+        event_player_col="tracking_player_id",
+        **best_parameters,
+    )
+    brier = sklearn.metrics.brier_score_loss(df_test["outcome"], xc)
+    logloss = sklearn.metrics.log_loss(df_test["outcome"], xc)
+    auc = sklearn.metrics.roc_auc_score(df_test["outcome"], xc)
+    st.write("Test results")
+    st.write(f"Brier: {brier}")
+    st.write(f"Logloss: {logloss}")
+    st.write(f"AUC: {auc}")
+    return
 
 
 def main():
