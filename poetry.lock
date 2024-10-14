@@ -4717,6 +4717,17 @@ files = [
 ]
 
 [[package]]
+name = "xmltodict"
+version = "0.14.1"
+description = "Makes working with XML feel like you are working with JSON"
+optional = false
+python-versions = ">=3.6"
+files = [
+    {file = "xmltodict-0.14.1-py2.py3-none-any.whl", hash = "sha256:3ef4a7b71c08f19047fcbea572e1d7f4207ab269da1565b5d40e9823d3894e63"},
+    {file = "xmltodict-0.14.1.tar.gz", hash = "sha256:338c8431e4fc554517651972d62f06958718f6262b04316917008e8fd677a6b0"},
+]
+
+[[package]]
 name = "zipp"
 version = "3.20.1"
 description = "Backport of pathlib-compatible object wrapper for zip files"
@@ -4738,4 +4749,4 @@ type = ["pytest-mypy"]
 [metadata]
 lock-version = "2.0"
 python-versions = ">=3.10,<3.13"
-content-hash = "6fd327dce529b4c097a29c89fd5cf6f10c1392dc296654775ffbb5753ec2b002"
+content-hash = "cd09a3c01d333846db2ad187acf6a34f1963769e1ccc447a92089b67aa18929d"

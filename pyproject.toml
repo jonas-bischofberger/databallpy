@@ -38,6 +38,7 @@ scipy = "^1.11.1"
 pandas = "^2.1.0"
 chardet = "^5.2.0"
 streamlit = "^1.38.0"
+xmltodict = "^0.14.1"
 
 [tool.poetry.group.developing]
 optional = true

@@ -105,7 +105,7 @@ def per_object_frameify_tracking_data(
         df_player = df_tracking[[frame_col] + coordinate_cols]
         df_player = df_player.rename(columns=coordinate_mapping)
         df_player[new_player_col] = player
-        df_player[new_team_col] = player_to_team[player]
+        df_player[new_team_col] = player_to_team.get(player, None)
         dfs_player.append(df_player)
 
     df_player = pd.concat(dfs_player, axis=0)
@@ -181,6 +181,7 @@ def get_expected_pass_completion(
     n_frames_after_pass_for_v0=5, fallback_v0=10, tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx",
     tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
+    outcome_col="success",
 
     # xC Parameters
     exclude_passer=True,
@@ -206,9 +207,10 @@ def get_expected_pass_completion(
     tol_distance=dangerous_accessible_space.DEFAULT_TOL_DISTANCE,
     use_approx_two_point=dangerous_accessible_space.DEFAULT_USE_APPROX_TWO_POINT,
 ):
-    df_passes = df_passes.copy()
+    df_passes = df_passes.sort_values(event_frame_col).copy()
 
     # 1. Extract player and ball positions at passes
+    assert set(df_passes[event_frame_col]).issubset(set(df_tracking[tracking_frame_col]))
     i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
     PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
         df_tracking.loc[i_pass_in_tracking], frame_col=tracking_frame_col, player_col=tracking_player_col,
@@ -243,6 +245,9 @@ def get_expected_pass_completion(
     else:
         passers_to_exclude = None
 
+    # st.write("df_passes", df_passes.shape)
+    # st.write(df_passes)
+
     # 5. Simulate passes to get expected completion
     simulation_result = dangerous_accessible_space.simulate_passes(
         # xC parameters
@@ -269,7 +274,7 @@ def get_expected_pass_completion(
     else:
         xc = simulation_result.prob_cum_att[:, 0, -1]  # F x PHI x T ---> F
 
-    outcomes = df_passes["outcome"].values
+    outcomes = df_passes[outcome_col].values
 
     brier = sklearn.metrics.brier_score_loss(outcomes, xc)
     logloss = sklearn.metrics.log_loss(outcomes, xc, labels=[0, 1])
@@ -277,67 +282,9 @@ def get_expected_pass_completion(
     brier_baseline = np.mean((outcomes - average_completion)**2)
     brier_skill_score = 1 - brier / brier_baseline
 
-    # st.write("brier", brier)
-    # st.write("logloss", logloss)
-    # st.write("brier_skill_score", brier_skill_score)
-    # st.write("average_completion", average_completion)
-    # st.write("average_xc", np.mean(xc))
-
-    idx = df_passes[event_frame_col].map(frame_to_idx),
+    idx = df_passes[event_frame_col].map(frame_to_idx)
 
     return xc, idx, simulation_result
-
-    # df_passes["xC"] = xc
-
-    # st.write("df_passes")
-    # st.write(df_passes)
-
-    # brier = np.mean(df_passes["outcome"] - df_passes["xC"])**2
-    # logloss = sklearn.metrics.log_loss(df_passes["outcome"], df_passes["xC"])
-    # average_completion_rate = np.mean(df_passes["outcome"])
-    # st.write("average_completion_rate")
-    # st.write(average_completion_rate)
-
-    # brier_baseline = np.mean((df_passes["outcome"] - average_completion_rate)**2)
-
-    # st.write("brier", brier)
-    # st.write("logloss", logloss)
-    # st.write("brier_baseline", brier_baseline)
-
-    # xc = df_passes["xC"]
-
-    # df_passes["xC_string"] = xc.apply(lambda x: f"xC={x:.1%}")
-
-    # st.write("xc", xc)
-
-    # for pass_nr, (pass_index, p4ss) in enumerate(df_passes.iterrows()):
-    #     fig, ax = databallpy.visualize.plot_soccer_pitch(field_dimen=match.pitch_dimensions, pitch_color="white")
-    #     fig, ax = databallpy.visualize.plot_tracking_data(
-    #         match,
-    #         p4ss["frame"],
-    #         fig=fig,
-    #         ax=ax,
-    #         team_colors=["blue", "red"],
-    #         # events=["pass"],
-    #         title="First pass after the kick-off",
-    #         add_velocities=True,
-    #         variable_of_interest=df_passes.loc[pass_index, "xC_string"],
-    #     )
-    #     st.write("p4ss")
-    #     st.write(df_passes)
-    #     st.write("match.passes_df.loc[pass_index]")
-    #     st.write(match.passes_df)
-    #     plt.arrow(
-    #         p4ss["start_x"], p4ss["start_y"], p4ss["end_x"] - p4ss["start_x"],
-    #         p4ss["end_y"] - p4ss["start_y"], head_width=1, head_length=1, fc='blue', ec='blue'
-    #     )
-    #     st.write(fig)
-    #     plt.close(fig)
-    #
-    #     if pass_nr > 5:
-    #         break
-
-    # return xc
 
 
 def get_dangerous_accessible_space(

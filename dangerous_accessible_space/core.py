@@ -195,6 +195,9 @@ def simulate_passes(
     tol_distance=DEFAULT_TOL_DISTANCE,
     use_approx_two_point=DEFAULT_USE_APPROX_TWO_POINT,
 ) -> Result:
+    # st.write("PLAYER_POS", PLAYER_POS.shape)
+    # st.write(PLAYER_POS[0, :, :])
+
     """ Calculate the pass simulation model - Core functionality of this package """
     _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams)
 
@@ -238,7 +241,12 @@ def simulate_passes(
         )
 
     if passers_to_exclude is not None:
+        # st.write("players", players.shape)
+        # st.write(players)
+        # st.write("passers_to_exclude", passers_to_exclude.shape)
+        # st.write(passers_to_exclude)
         i_passers_to_exclude = np.array([list(players).index(passer) for passer in passers_to_exclude])
+        # st.write("i_passers_to_exclude", i_passers_to_exclude.shape)
         i_frames = np.arange(TTA_PLAYERS.shape[0])
         TTA_PLAYERS[i_frames, i_passers_to_exclude, :, :] = np.inf  # F x P x PHI x T
 
@@ -288,10 +296,12 @@ def simulate_passes(
 
     # poss-specific
     player_is_attacking = player_teams[np.newaxis, :] == passer_teams[:, np.newaxis]  # F x P
-    x = np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    y = np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    sum_ar_att = np.nansum(x, axis=1)  # F x V0 x PHI x T
-    sum_ar_def = np.nansum(y, axis=1)  # F x V0 x PHI x T
+    # x = np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
+    # y = np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
+    # sum_ar_att = np.nansum(x, axis=1)  # F x V0 x PHI x T
+    # sum_ar_def = np.nansum(y, axis=1)  # F x V0 x PHI x T
+    sum_ar_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0), axis=1)  # F x V0 x PHI x T
+    sum_ar_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0), axis=1)  # F x V0 x PHI x T
 
     # poss-specific
     int_sum_ar = integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
@@ -347,8 +357,8 @@ def simulate_passes(
 
     # Normalize 3/4: poss density
     dpr_over_dx_vagg_poss_times_dx = dpr_over_dx_vagg_poss * DX  # F x P x PHI x T
-    num_max = np.max(dpr_over_dx_vagg_poss_times_dx, axis=(1, 3))  # F
-    dpr_over_dx_vagg_poss = dpr_over_dx_vagg_poss / num_max[:, np.newaxis, :, np.newaxis]
+    num_max = np.max(dpr_over_dx_vagg_poss_times_dx, axis=(1, 3))  # F x PHI
+    dpr_over_dx_vagg_poss = dpr_over_dx_vagg_poss / num_max[:, np.newaxis, :, np.newaxis]  # F x P x PHI x T
     # st.write("dpr_over_dx_vagg_poss", dpr_over_dx_vagg_poss.shape, np.min(dpr_over_dx_vagg_poss), np.max(dpr_over_dx_vagg_poss))
 
     # Normalize 2/4: prob density
@@ -392,6 +402,15 @@ def simulate_passes(
     # normalize 3/4: poss cum
     pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
     pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
+
+    # st.write("pr_cum_poss_att", pr_cum_poss_att.shape)
+    # st.write(pr_cum_poss_att[0, 0, :])
+    # st.write("pr_cum_att", pr_cum_att.shape)
+    # st.write(pr_cum_att[0, 0, :])
+    # st.write("pr_cum_def", pr_cum_def.shape)
+    # st.write(pr_cum_def[0, 0, :])
+    # st.write("pr_cum_poss_def", pr_cum_poss_def.shape)
+    # st.write(pr_cum_poss_def[0, 0, :])
 
     # st.write("dpr_over_dx_vagg_att_poss", dpr_over_dx_vagg_att_poss.shape, np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
     # st.write("dpr_over_dx_vagg_def_poss", dpr_over_dx_vagg_def_poss.shape, np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
