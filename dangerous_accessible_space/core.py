@@ -19,6 +19,8 @@ _result_fields = [
     "r_grid",  # T
     "x_grid",  # F x PHI x T
     "y_grid",  # F x PHI x T
+
+    "danger",  # F x PHI x T
 ]
 Result = collections.namedtuple("Result", _result_fields, defaults=[None] * len(_result_fields))
 
@@ -106,7 +108,7 @@ DEFAULT_RADIAL_GRIDSIZE = 3
 #     v0_min=DEFAULT_V0_MIN_FOR_XC,
 #     v0_max=DEFAULT_V0_MAX_FOR_XC,
 #     n_v0=DEFAULT_N_V0_FOR_XC,
-PARAMETER_BOUNDS = {
+PARAMETER_BOUNDS_OK_RESULT = {
     # Core model
     "pass_start_location_offset": [0.001, 1],
     "time_offset_ball": [-0.0001, 0.0001],
@@ -154,6 +156,57 @@ PARAMETER_BOUNDS = {
     "use_fixed_v0": [False, True],
     "v0_min": [1, 9.999],
     "v0_max": [5, 30],
+    "n_v0": [0.5, 9.5],
+}
+PARAMETER_BOUNDS = {
+    # Core model
+    "pass_start_location_offset": [0.001, 1],
+    "time_offset_ball": [-0.0001, 0.0001],
+    "radial_gridsize": [3, 7],
+    "b0": [-10, 5],
+    "b1": [-200, 0],
+    "player_velocity": [2, 35],
+    "keep_inertial_velocity": [False, True],  # , False],
+    "use_max": [False, True],
+    "v_max": [5, 40],
+    "a_max": [10, 30],
+    "inertial_seconds": [0.0, 1.5],  # , True],
+    "tol_distance": [0, 7],
+    "use_approx_two_point": [False, True],
+
+    # "t_max": [0.01, 20],
+    # "d_max": [1, 10],
+
+    # "int_prob_mode": [False, True],
+    # "seconds_to_intercept": [0.01, 5.5],
+    # "tol_distance": [0, 20],
+    # "inflation": [0.01, 100],
+    # "use_inflation": [False],
+
+    # "dummy": [1, 10],
+
+    # "require_specific_receiver": [False],  # , True],#[False, True],  # , True],#, True],
+
+    # "use_const_v": [False],  # , True],  # [False, True],
+    # "int_prob_mode": [False, True],  #, True],
+    # "int_prob_mode": ["sigmoid"],  # ["sigmoid"],# "step", "expit"],  #, True],
+    # "use_ramp": [False],  # , True],#, True],  #, True],
+
+    # "mean_aggregation": [False, True],
+    # "n_angles": [0.51, 7.49],
+
+    # "dummy_variable": ["hallo"],
+    # "b_over_m": [0, 0.05],
+    # "recalibration_method": ["sigmoid", None],
+    # "recalibration_method": [""],
+
+    # xC
+    "exclude_passer": [False, True],
+    "use_poss": [False, True],  # , True],#, True],
+    "use_fixed_v0": [False, True],
+    "v0_min": [1, 9.999],
+    # "v0_max": [5, 30],
+    "v0_max": [30, 60],
     "n_v0": [0.5, 9.5],
 }
 
@@ -444,12 +497,12 @@ def simulate_passes(
 
 def _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list):
     F = PLAYER_POS.shape[0]
-    assert F == BALL_POS.shape[0]
-    assert F == phi_grid.shape[0]
-    assert F == v0_grid.shape[0]
+    assert F == BALL_POS.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but BALL_POS shape is {BALL_POS.shape}"
+    assert F == phi_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but phi_grid shape is {phi_grid.shape}"
+    assert F == v0_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but v0_grid shape is {v0_grid.shape}"
     assert F == passer_team.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but passer_team shape is {passer_team.shape}"
     P = PLAYER_POS.shape[1]
-    assert P == team_list.shape[0]
+    assert P == team_list.shape[0], f"Dimension P is {P} (from PLAYER_POS: {PLAYER_POS.shape}), but team_list shape is {team_list.shape}"
     assert PLAYER_POS.shape[2] >= 4  # >= or = ?
     assert BALL_POS.shape[1] >= 2  # ...
 
@@ -536,7 +589,7 @@ def mask_out_of_play(simulation_result: Result) -> Result:
     return simulation_result
 
 
-def aggregate_surface_area(result):
+def aggregate_surface_area(result, add_danger=False):
     result = mask_out_of_play(result)
 
     # Get r-part of area elements
@@ -574,28 +627,10 @@ def aggregate_surface_area(result):
 
     p = result.poss_density_att * dr
 
-    AS = np.sum(p * dA, axis=(1, 2))  # F
-
-    return AS
-
-    # xt = get_xT_prediction(x, y, THROW_IN_XT)
-
-
-def add_xT_to_result(simulation_result: Result):
-    import databallpy.models.utils
-    import databallpy.events.base_event
-    xt_model = databallpy.events.base_event.OPEN_PLAY_XT
-    xt = databallpy.models.utils.get_xT_prediction(simulation_result.x_grid, simulation_result.y_grid, xt_model)
-
-    simulation_result = simulation_result._replace(
-        poss_cum_att=simulation_result.poss_cum_att * xt,
-        prob_cum_att=simulation_result.prob_cum_att * xt,
-        poss_density_att=simulation_result.poss_density_att * xt,
-        prob_density_att=simulation_result.prob_density_att * xt,
-        poss_cum_def=simulation_result.prob_cum_def * xt,
-        prob_cum_def=simulation_result.prob_cum_def * xt,
-        poss_density_def=simulation_result.poss_density_def * xt,
-        prob_density_def=simulation_result.prob_density_def * xt,
-    )
-
-    return simulation_result
+    if add_danger:
+        danger = result.danger
+        DAS = np.sum(p * dA * danger, axis=(1, 2))  # F
+        return DAS
+    else:
+        AS = np.sum(p * dA, axis=(1, 2))  # F
+        return AS

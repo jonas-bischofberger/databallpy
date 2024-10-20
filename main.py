@@ -1,5 +1,7 @@
 import json
 import functools
+import os.path
+import random
 
 import streamlit_profiler
 import tqdm
@@ -152,44 +154,274 @@ def _get_preprocessed_data():
     return match, df_tracking, df_events
 
 
+def check_synthetic_pass(p4ss, df_tracking_att, receiver_v):
+    p4ss["angle"] = math.atan2(p4ss["end_coordinates_y"] - p4ss["coordinates_y"], p4ss["end_coordinates_x"] - p4ss["coordinates_x"])
+
+    V_RECEIVER_MAX_SQ = 4
+    V_PLAYER = 10
+
+    if receiver_v > V_RECEIVER_MAX_SQ:
+        return False
+
+    v0_pass = p4ss["v0"]
+    v0x_pass = v0_pass * math.cos(p4ss["angle"])
+    v0y_pass = v0_pass * math.sin(p4ss["angle"])
+    x0_pass = p4ss["coordinates_x"]
+    y0_pass = p4ss["coordinates_y"]
+
+    pass_length = math.sqrt((p4ss["coordinates_x"] - p4ss["end_coordinates_x"]) ** 2 + (p4ss["coordinates_y"] - p4ss["end_coordinates_y"]) ** 2)
+    pass_duration = pass_length / v0_pass
+
+    if pass_duration < 0.2:
+        return False
+
+    df_tracking_att = df_tracking_att[(df_tracking_att["team_id"] == p4ss["team_id"])]
+    for _, row in df_tracking_att.iterrows():
+        x_player = row["x"]
+        y_player = row["y"]
+
+        distance_to_target = math.sqrt((x_player - p4ss["end_coordinates_x"]) ** 2 + (y_player - p4ss["end_coordinates_y"]) ** 2)
+        necessary_speed_to_reach_target = distance_to_target / pass_duration
+        if necessary_speed_to_reach_target < V_PLAYER:
+            return False
+
+        def can_intercept(x0b, y0b, vxb, vyb, x_A, y_A, v_A, duration):
+            # Constants
+            C = (x0b - x_A) ** 2 + (y0b - y_A) ** 2
+            B = 2 * ((x0b - x_A) * vxb + (y0b - y_A) * vyb)
+            A = v_A ** 2 - (vxb ** 2 + vyb ** 2)
+
+            if A <= 0:
+                # If A is non-positive, agent A cannot intercept object B
+                return False
+
+            # Calculate the discriminant of the quadratic equation
+            discriminant = B ** 2 + 4 * A * C
+
+            # Check if the discriminant is non-negative and if there are real, positive roots
+            if discriminant >= 0:
+                # Roots of the quadratic equation
+                sqrt_discriminant = math.sqrt(discriminant)
+                t1 = (B - sqrt_discriminant) / (2 * A)
+                t2 = (B + sqrt_discriminant) / (2 * A)
+
+                # Check if any of the roots are non-negative
+                if t1 >= 0 or t2 >= 0 and t1 < duration and t2 < duration:
+                    return True
+
+            return False
+
+        defender_can_intercept = can_intercept(x0_pass, y0_pass, v0x_pass, v0y_pass, x_player, y_player, V_PLAYER, pass_duration)
+
+        if defender_can_intercept:
+            return False
+        else:
+            continue
+
+    return True
+
+
+def add_synthetic_passes(
+        df_passes, df_tracking, n_synthetic_passes=5, event_frame_col="frame_id", tracking_frame_col="frame_id",
+        event_team_col="team_id", tracking_team_col="team_id", event_player_col="player_id", tracking_player_col="player_id",
+        new_is_synthetic_col="is_synthetic"
+):
+    st.write("add_synthetic_passes...")
+    df_passes[new_is_synthetic_col] = False
+    synthetic_passes = []
+
+    i = 0
+
+    teams = df_tracking[tracking_team_col].unique()
+
+    for _, p4ss in df_passes.sample(frac=1).iterrows():
+        # for attacking_team in df_tracking[tracking_team_col].unique():
+        for attacking_team in teams:
+            df_frame_players = df_tracking[
+                (df_tracking[event_frame_col] == p4ss[event_frame_col]) &
+                (df_tracking["x"].notna()) &
+                (df_tracking[event_team_col].notna())  # ball
+            ]
+            df_frames_defenders = df_frame_players[df_frame_players[tracking_team_col] != attacking_team]
+            df_frame_attackers = df_frame_players[df_frame_players[tracking_team_col] == attacking_team]
+
+            for _, attacker_frame in df_frame_attackers.iterrows():
+                for _, defender_frame in df_frames_defenders.iterrows():
+                    for v0 in [10]: #[5, 10, 15, 20]:
+                        synthetic_pass = {
+                            "frame_id": p4ss[event_frame_col],
+                            "coordinates_x": attacker_frame["x"],
+                            "coordinates_y": attacker_frame["y"],
+                            "end_coordinates_x": defender_frame["x"],
+                            "end_coordinates_y": defender_frame["y"],
+                            "event_type": None,
+                            "Subtype": None,
+                            "period": None,
+                            "end_frame_id": None,
+                            "v0": v0,
+                            "player_id": attacker_frame[tracking_player_col],
+                            "team_id": attacker_frame[tracking_team_col],
+                            "success": False,
+                            new_is_synthetic_col: True,
+                        }
+                        # assert p4ss[event_team_col] == attacker_frame[tracking_team_col]
+                        # i += 1
+                        # if i > 15:
+                        #     st.stop()
+
+                        if check_synthetic_pass(synthetic_pass, df_frame_players, receiver_v=defender_frame["v"]):
+                            synthetic_passes.append(synthetic_pass)
+                            if len(synthetic_passes) >= n_synthetic_passes:
+                                break
+                    if len(synthetic_passes) >= n_synthetic_passes:
+                        break
+                if len(synthetic_passes) >= n_synthetic_passes:
+                    break
+            if len(synthetic_passes) >= n_synthetic_passes:
+                break
+        if len(synthetic_passes) >= n_synthetic_passes:
+            break
+
+    df_synthetic_passes = pd.DataFrame(synthetic_passes)
+
+    assert len(df_synthetic_passes) == n_synthetic_passes, f"len(df_synthetic_passes)={len(df_synthetic_passes)} != n_synthetic_passes={n_synthetic_passes}, ({len(synthetic_passes)=}"
+
+    return pd.concat([df_passes, df_synthetic_passes], axis=0)
+
+
+def get_scores(df, baseline_accuracy, outcome_col="success"):
+    data = {}
+
+    # Descriptives
+    data["average_accuracy"] = df[outcome_col].mean()
+    data["synthetic_share"] = df["is_synthetic"].mean()
+
+    # Baselines
+    data["baseline_brier"] = sklearn.metrics.brier_score_loss(df[outcome_col], [baseline_accuracy] * len(df))
+    try:
+        data["baseline_logloss"] = sklearn.metrics.log_loss(df[outcome_col], [baseline_accuracy] * len(df))
+    except ValueError:
+        data["baseline_logloss"] = np.nan
+    try:
+        data["baseline_auc"] = sklearn.metrics.roc_auc_score(df[outcome_col], [baseline_accuracy] * len(df))
+    except ValueError:
+        data["baseline_auc"] = np.nan
+
+    if "xc" in df.columns:
+        # Model scores
+        data["brier_score"] = sklearn.metrics.brier_score_loss(df[outcome_col], df["xc"])
+        try:
+            data["logloss"] = sklearn.metrics.log_loss(df[outcome_col], df["xc"])
+        except ValueError:
+            data["logloss"] = np.nan
+        try:
+            data["auc"] = sklearn.metrics.roc_auc_score(df[outcome_col], df["xc"])
+        except ValueError:
+            data["auc"] = np.nan
+    else:
+        data["brier_score"] = np.nan
+        data["logloss"] = np.nan
+        data["auc"] = np.nan
+
+    # Model scores by syntheticness
+    for is_synthetic in [False, True]:
+        synth_str = "synthetic" if is_synthetic else "real"
+        df_synth = df[df["is_synthetic"] == is_synthetic]
+
+        if "xc" in df.columns:
+            data[f"brier_score_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], df_synth["xc"])
+            try:
+                data[f"logloss_{synth_str}"] = sklearn.metrics.log_loss(df_synth[outcome_col], df_synth["xc"])
+            except ValueError:
+                data[f"logloss_{synth_str}"] = np.nan
+            try:
+                data[f"auc_{synth_str}"] = sklearn.metrics.roc_auc_score(df_synth[outcome_col], df_synth["xc"])
+            except ValueError:
+                data[f"auc_{synth_str}"] = np.nan
+
+        data[f"average_accuracy_{synth_str}"] = df_synth[outcome_col].mean()
+        data[f"synthetic_share_{synth_str}"] = df_synth["is_synthetic"].mean()
+        data[f"baseline_brier_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
+        try:
+            data[f"baseline_loglos_{synth_str}"] = sklearn.metrics.log_loss(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
+        except ValueError:
+            data[f"baseline_loglos_{synth_str}"] = np.nan
+        try:
+            data[f"baseline_auc_{synth_str}"] = sklearn.metrics.roc_auc_score(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
+        except ValueError:
+            data[f"baseline_auc_{synth_str}"] = np.nan
+
+    return data
+
+
 def validate_multiple_matches(
     dfs_tracking, dfs_passes, n_steps=100, training_size=0.75,
 
-    outcome_col="success"
+    outcome_col="success", tracking_team_col="team_id", event_team_col="team_id",
 ):
     random_state = 1893
 
+    plot_synthetic_passes = st.button("Plot synthetic passes")
+
+    ## Add synthetic passes
+    dfs_passes_with_synthetic = []
+    for df_tracking, df_passes in zip(dfs_tracking, dfs_passes):
+        # n_synthetic_passes = 5
+        n_synthetic_passes = len(df_passes[df_passes["success"]]) - len(df_passes[~df_passes["success"]])
+        st.write("n_synthetic_passes", n_synthetic_passes)
+
+        df_passes = add_synthetic_passes(df_passes, df_tracking, n_synthetic_passes=n_synthetic_passes, tracking_frame_col="frame_id", event_frame_col="frame_id")
+        dfs_passes_with_synthetic.append(df_passes)
+
+        if plot_synthetic_passes:
+            columns = st.columns(2)
+            for pass_nr, (_, synthetic_pass) in enumerate(df_passes[df_passes["is_synthetic"]].iterrows()):
+                df_frame = df_tracking[df_tracking["frame_id"] == synthetic_pass["frame_id"]]
+                fig = plt.figure()
+                plt.arrow(synthetic_pass["coordinates_x"], synthetic_pass["coordinates_y"], synthetic_pass["end_coordinates_x"] - synthetic_pass["coordinates_x"], synthetic_pass["end_coordinates_y"] - synthetic_pass["coordinates_y"], head_width=1, head_length=1, fc='k', ec='k')
+
+                plt.plot([-52.5, -52.5], [-34, 34], color="black", alpha=0.5)
+                plt.plot([52.5, 52.5], [-34, 34], color="black", alpha=0.5)
+                plt.plot([-52.5, 52.5], [-34, -34], color="black", alpha=0.5)
+                plt.plot([-52.5, 52.5], [34, 34], color="black", alpha=0.5)
+
+                df_frame_home = df_frame[df_frame[tracking_team_col] == synthetic_pass[event_team_col]]
+                plt.scatter(df_frame_home["x"], df_frame_home["y"], color="red", alpha=1)
+                df_frame_def = df_frame[(df_frame[tracking_team_col] != synthetic_pass[event_team_col]) & (df_frame[tracking_team_col].notna())]
+                plt.scatter(df_frame_def["x"], df_frame_def["y"], color="blue", alpha=1)
+                df_frame_ball = df_frame[df_frame[tracking_team_col].isna()]
+                plt.scatter(df_frame_ball["x"], df_frame_ball["y"], color="black", alpha=1, marker="x", s=100)
+
+                columns[pass_nr % 2].write(f"Pass {pass_nr} (frame {synthetic_pass['frame_id']})")
+                columns[pass_nr % 2].write(fig)
+
+                plt.close()
+
+    ##
     dfs_training = []
     dfs_test = []
-    for dataset_nr, df_passes in enumerate(dfs_passes):
+    for dataset_nr, df_passes in enumerate(dfs_passes_with_synthetic):
         dataset_nr_col = dangerous_accessible_space.interface._get_unused_column_name(df_passes, "dataset_nr")
         df_passes[dataset_nr_col] = dataset_nr
-        df_training, df_test = sklearn.model_selection.train_test_split(df_passes, stratify=df_passes[outcome_col], train_size=training_size, random_state=random_state)
+        df_passes["stratification_var"] = df_passes[outcome_col].astype(str) + "_" + df_passes["is_synthetic"].astype(str)
+        df_training, df_test = sklearn.model_selection.train_test_split(df_passes, stratify=df_passes["stratification_var"], train_size=training_size, random_state=random_state)
         # df_training, df_test = df_passes, df_passes
+
         dfs_training.append(df_training)
         dfs_test.append(df_test)
 
     df_training = pd.concat(dfs_training)
     df_test = pd.concat(dfs_test)
 
-    st.write("Number of training passes", len(df_training), df_training[outcome_col].mean())
-    st.write("Number of test passes", len(df_test), df_test[outcome_col].mean())
+    st.write("Number of training passes", len(df_training), f"avg. accuracy={df_training[outcome_col].mean():.1%}")
+    st.write("Number of test passes", len(df_test), f"avg. accuracy={df_test[outcome_col].mean():.1%}")
 
-    average_accuracy_training = df_training[outcome_col].mean()
-    st.write("Average Accuracy training", average_accuracy_training)
-    baseline_brier = sklearn.metrics.brier_score_loss(df_test[outcome_col], [average_accuracy_training] * len(df_test))
-    st.write("Baseline brier (test)", baseline_brier)
-    try:
-        baseline_logloss = sklearn.metrics.log_loss(df_test[outcome_col], [average_accuracy_training] * len(df_test))
-    except ValueError:
-        baseline_logloss = np.nan
-    st.write("Baseline logloss", baseline_logloss)
-    try:
-        baseline_auc = sklearn.metrics.roc_auc_score(df_test[outcome_col], [average_accuracy_training] * len(df_test))
-    except ValueError:
-        baseline_auc = np.nan
-
-    st.write("Baseline AUC", baseline_auc)
+    training_scores = get_scores(df_training, df_training[outcome_col].mean(), outcome_col=outcome_col)
+    test_scores = get_scores(df_test, df_training[outcome_col].mean(), outcome_col=outcome_col)
+    st.write("Training scores")
+    st.write(training_scores)
+    st.write("Test scores")
+    st.write(test_scores)
 
     def _choose_random_parameters(parameter_to_bounds):
         random_parameters = {}
@@ -204,11 +436,20 @@ def validate_multiple_matches(
         return random_parameters
 
     data = {
-        "brier": [],
+        "brier_score": [],
         "logloss": [],
         "auc": [],
-        "parameters": [],
+        "brier_score_synthetic": [],
+        # "logloss_synthetic": [],
+        # "auc_synthetic": [],
+        "brier_score_real": [],
+        "logloss_real": [],
+        "auc_real": []
     }
+    data.update({key: [] for key in training_scores.keys()})
+    data["parameters"] = []
+    st.write("n_steps")
+    st.write(n_steps)
     progress_bar_text = st.empty()
     progress_bar = st.progress(0)
     display_df = st.empty()
@@ -220,14 +461,12 @@ def validate_multiple_matches(
         data_simres = {
             "xc": [],
             "success": [],
+            "is_synthetic": [],
         }
         for dataset_nr, df_training_passes in df_training.groupby("dataset_nr"):
             df_tracking = dfs_tracking[dataset_nr]
-            # st.write("df_tracking")
-            # st.write(df_tracking[["frame_id", "player_id", "team_id", "x", "y", "vx", "vy", "v"]].head(500))
-            # st.write("df_training_passes")
-            # st.write(df_training_passes[["frame_id", "player_id", "team_id", "coordinates_x", "coordinates_y", "end_coordinates_x", "end_coordinates_y"]])
             df_training_passes = df_training_passes.sort_values("frame_id")
+            importlib.reload(dangerous_accessible_space)
             xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
                 df_training_passes, df_tracking, event_frame_col="frame_id", tracking_frame_col="frame_id", event_start_x_col="coordinates_x",
                 event_start_y_col="coordinates_y", event_end_x_col="end_coordinates_x", event_end_y_col="end_coordinates_y",
@@ -238,15 +477,10 @@ def validate_multiple_matches(
                 n_frames_after_pass_for_v0=5, fallback_v0=10,
 
                 **random_paramter_assignment,
-
-                # tracking_team_col="team_id", ball_tracking_player_id="ball",
-                #     n_frames_after_pass_for_v0=5, fallback_v0=10, tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx",
-                #     tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
-                #     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
-                #     outcome_col="success",
             )
             data_simres["xc"].extend(xc)
             data_simres["success"].extend(df_training_passes[outcome_col].tolist())
+            data_simres["is_synthetic"].extend(df_training_passes["is_synthetic"].tolist())
 
         df_simres = pd.DataFrame(data_simres)
         brier = sklearn.metrics.brier_score_loss(df_simres["success"], df_simres["xc"])
@@ -259,10 +493,17 @@ def validate_multiple_matches(
         except ValueError:
             auc = np.nan
 
-        data["brier"].append(brier)
-        data["logloss"].append(logloss)
-        data["auc"].append(auc)
+        # data["brier"].append(brier)
+        # data["logloss"].append(logloss)
+        # data["auc"].append(auc)
         data["parameters"].append(random_paramter_assignment)
+        for key,value in random_paramter_assignment.items():
+            data.setdefault(key, []).append(value)
+
+        scores = get_scores(df_simres, df_training[outcome_col].mean(), outcome_col=outcome_col)
+        for key, value in scores.items():
+            # data[key].append(value)
+            data.setdefault(key, []).append(value)
 
         display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
 
@@ -278,6 +519,7 @@ def validate_multiple_matches(
     data_simres = {
         "xc": [],
         "success": [],
+        "is_synthetic": [],
     }
     for dataset_nr, df_test_passes in df_test.groupby("dataset_nr"):
         df_tracking = dfs_tracking[dataset_nr]
@@ -301,23 +543,99 @@ def validate_multiple_matches(
         )
         data_simres["xc"].extend(xc)
         data_simres["success"].extend(df_training_passes[outcome_col].tolist())
-    df_simres = pd.DataFrame(data_simres)
-    brier = sklearn.metrics.brier_score_loss(df_simres["success"], df_simres["xc"])
-    logloss = sklearn.metrics.log_loss(df_simres["success"], df_simres["xc"])
-    auc = sklearn.metrics.roc_auc_score(df_simres["success"], df_simres["xc"])
+        data_simres["is_synthetic"].extend(df_training_passes["is_synthetic"].tolist())
 
-    # brier = sklearn.metrics.brier_score_loss(df_test[outcome_col], df_test["xc"])
-    # logloss = sklearn.metrics.log_loss(df_test[outcome_col], df_test["xc"])
-    # auc = sklearn.metrics.roc_auc_score(df_test[outcome_col], df_test["xc"])
-    st.write("Test results")
-    st.write(f"Brier: {brier}")
-    st.write(f"Logloss: {logloss}")
-    st.write(f"AUC: {auc}")
+    df_simres_test = pd.DataFrame(data_simres)
 
-    brier_skill_score = 1 - brier / baseline_brier
-    st.write(f"Brier skill score: {brier_skill_score}")
+    test_scores = get_scores(df_simres_test, df_training[outcome_col].mean(), outcome_col=outcome_col)
+    st.write("test_scores")
+    st.write(test_scores)
 
-    return
+    st.write("df_simres_test")
+    st.write(df_simres_test)
+
+    # do calibration plot
+    def bin_nr_calibration_plot(df, outcome_col="success", n_bins=None, binsize=None):
+        if binsize is None and n_bins is not None:
+            df["bin"] = pd.qcut(df["xc"], n_bins, labels=False, duplicates="drop")
+        elif binsize is not None and n_bins is None:
+            # Calculate the number of bins based on the specified binsize
+            min_val = df["xc"].min()
+            max_val = df["xc"].max()
+
+            # Create bins using pd.cut with float values
+            bin_edges = [min_val + i * binsize for i in range(int((max_val - min_val) / binsize) + 2)]
+            df["bin"] = pd.cut(df["xc"], bins=bin_edges, labels=False, include_lowest=True)
+        else:
+            raise ValueError("Either n_bins or binsize must be specified")
+
+        df_calibration = df.groupby("bin").agg({"success": "mean", "xc": "mean"}).reset_index()
+        df_calibration["bin"] = df_calibration["bin"] + 1
+        fig, ax = plt.subplots()
+        ax.plot(df_calibration["xc"], df_calibration["success"], marker="o")
+        ax.plot([0, 1], [0, 1], linestyle="--", color="black")
+
+        # annotate each point with the number of samples
+        for i, row in df_calibration.iterrows():
+            count = len(df[df['bin'] == row['bin']])  # Count of samples in the bin
+            ax.annotate(
+                f"n={count}",  # Text to display
+                (row["xc"], row["success"]-0.03),  # Position of the text
+                bbox=dict(boxstyle='round,pad=0.3', edgecolor='black', facecolor='lightblue'),  # Text box styling
+                fontsize=8,  # Font size
+                ha='center',  # Horizontal alignment
+                va='center'  # Vertical alignment
+            )
+
+        ax.set_xlabel("Predicted probability")
+        ax.set_ylabel("Observed probability")
+        ax.set_title("Calibration plot")
+        return fig
+
+    for n_bins in [5, 10, 20]:
+        st.write(f"Calibration plot with {n_bins} bins")
+        fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=n_bins)
+        st.pyplot(fig)
+
+    for binsize in [0.2, 0.1, 0.05]:
+        st.write(f"Calibration plot with binsize {binsize}")
+        fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, binsize=binsize)
+        st.pyplot(fig)
+
+    st.stop()
+
+    # brier = sklearn.metrics.brier_score_loss(df_simres_test["success"], df_simres_test["xc"])
+    # logloss = sklearn.metrics.log_loss(df_simres_test["success"], df_simres_test["xc"], labels=[0, 1])
+    # try:
+    #     auc = sklearn.metrics.roc_auc_score(df_simres_test["success"], df_simres_test["xc"])
+    # except ValueError as e:
+    #     auc = e
+    #
+    # # brier = sklearn.metrics.brier_score_loss(df_test[outcome_col], df_test["xc"])
+    # # logloss = sklearn.metrics.log_loss(df_test[outcome_col], df_test["xc"])
+    # # auc = sklearn.metrics.roc_auc_score(df_test[outcome_col], df_test["xc"])
+    # st.write("#### Test results")
+    # st.write(f"Brier: {brier}")
+    # st.write(f"Logloss: {logloss}")
+    # st.write(f"AUC: {auc}")
+    #
+    # # brier_skill_score = 1 - brier / baseline_brier
+    # # st.write(f"Brier skill score: {brier_skill_score}")
+    #
+    # for is_synthetic in [True, False]:
+    #     df_synth = df_simres_test[df_simres_test["is_synthetic"] == is_synthetic]
+    #     brier = sklearn.metrics.brier_score_loss(df_synth["success"], df_synth["xc"])
+    #     logloss = sklearn.metrics.log_loss(df_synth["success"], df_synth["xc"], labels=[0, 1])
+    #     try:
+    #         auc = sklearn.metrics.roc_auc_score(df_synth["success"], df_synth["xc"])
+    #     except ValueError as e:
+    #         auc = e
+    #     st.write(f"#### Test results (synthetic={is_synthetic})")
+    #     st.write(f"Brier (synthetic={is_synthetic}): {brier}")
+    #     st.write(f"Logloss (synthetic={is_synthetic}): {logloss}")
+    #     st.write(f"AUC (synthetic={is_synthetic}): {auc}")
+    #
+    # return
 
 
 def validate(n_steps=100, training_size=0.99):
@@ -379,6 +697,8 @@ def validate(n_steps=100, training_size=0.99):
         data["logloss"].append(logloss)
         data["auc"].append(auc)
         data["parameters"].append(random_paramter_assignment)
+        for parameter in random_paramter_assignment:
+            data.setdefault(parameter, []).append(random_paramter_assignment[parameter])
         display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
 
     df_training_results = pd.DataFrame(data)
@@ -406,6 +726,17 @@ def validate(n_steps=100, training_size=0.99):
     return
 
 
+import joblib
+memory = joblib.Memory(location=os.path.abspath(os.path.join(os.path.dirname(__file__), "joblib-cache")))
+
+
+@memory.cache
+def get_metrica_tracking_data(dataset_nr):
+    dataset = kloppy.metrica.load_open_data(dataset_nr)  # , limit=100)
+    df_tracking = dataset.to_df()
+    return df_tracking
+
+
 @st.cache_resource
 def get_kloppy_data():
     datasets = []
@@ -425,9 +756,21 @@ def get_kloppy_data():
         # )
         # df_events1 = pd.read_csv(f"https://raw.githubusercontent.com/metrica-sports/sample-data/refs/heads/master/data/Sample_Game_{dataset_nr}/Sample_Game_{dataset_nr}_RawEventsData.csv")
         # df_passes1 = df_events1[df_events1["Type"] == "PASS"]
-        dataset = kloppy.metrica.load_open_data(dataset_nr)#, limit=100)
-        # datasets.append((dataset.to_df(), df_passes1))
-        df_tracking = dataset.to_df()
+
+        with st.spinner(f"Downloading events from dataset {dataset_nr}"):
+            df_events = get_kloppy_events(dataset_nr).copy()
+        event_frames = df_events["frame_id"].unique()
+
+        delta_frames_to_load = 5
+
+        frames_to_load = [set(range(event_frame, event_frame+delta_frames_to_load)) for event_frame in event_frames]
+        frames_to_load = sorted(list(set([frame for frames in frames_to_load for frame in frames])))
+
+        with st.spinner(f"Downloading tracking data from dataset {dataset_nr}"):
+            df_tracking = get_metrica_tracking_data(dataset_nr)
+
+        df_tracking = df_tracking[df_tracking["frame_id"].isin(frames_to_load)]
+
         df_tracking[[col for col in df_tracking.columns if col.endswith("_x")]] = (df_tracking[[col for col in df_tracking.columns if col.endswith("_x")]].astype(float) - 0.5) * 105
         df_tracking[[col for col in df_tracking.columns if col.endswith("_y")]] = (df_tracking[[col for col in df_tracking.columns if col.endswith("_y")]].astype(float) - 0.5) * 68
 
@@ -468,8 +811,6 @@ def get_kloppy_data():
             df_tracking.loc[i_nan_y, f"{player}_vy"] = np.nan
             df_tracking.loc[i_nan_x | i_nan_y, f"{player}_velocity"] = np.nan
 
-        df_events = get_kloppy_events(dataset_nr).copy()
-
         player_to_team = {}
         if dataset_nr in [1, 2]:
             for player in players:
@@ -495,8 +836,6 @@ def get_kloppy_data():
         dfs_event.append(df_events)
 
         progress_bar.progress(dataset_nr / 3)
-
-
 
     # dataset3 = kloppy.metrica.load_open_data(3)
 
@@ -653,6 +992,54 @@ def main():
     st.write(f"Getting kloppy data...")
     dfs_tracking, dfs_event = get_kloppy_data()
 
+    for df_tracking, df_event in zip(dfs_tracking, dfs_event):
+        st.write("df_tracking A", df_tracking.shape)
+        st.write(df_tracking.head())
+        st.write("df_event", df_event.shape)
+        st.write(df_event)
+
+        def get_playing_direction(df_tracking, team_col, period_col="period_id"):
+            playing_direction = {}
+            for period_id, df_tracking_period in df_tracking.groupby(period_col):
+                x_mean = df_tracking_period.groupby(team_col)["x"].mean()
+                smaller_x_team = x_mean.idxmin()
+                greater_x_team = x_mean.idxmax()
+                playing_direction[period_id] = {smaller_x_team: 1, greater_x_team: -1}
+            return playing_direction
+
+        playing_direction = get_playing_direction(df_tracking, "team_id")
+        df_tracking["x_norm"] = np.nan
+        df_tracking["y_norm"] = np.nan
+        for period_id in playing_direction:
+            i_period = df_tracking["period_id"] == period_id
+            for team_id, direction in playing_direction[period_id].items():
+                i_period_team_possession = i_period & (df_tracking["ball_possession"] == team_id)
+                df_tracking.loc[i_period_team_possession, "x_norm"] = df_tracking.loc[i_period_team_possession, "x"] * direction
+                df_tracking.loc[i_period_team_possession, "y_norm"] = df_tracking.loc[i_period_team_possession, "y"] * direction
+                df_tracking.loc[i_period_team_possession, "attacking_direction"] = direction
+
+        st.write("df_tracking.head(5)")
+        st.write(df_tracking.head(5))
+
+        df_passes = df_event[(df_event["is_pass"]) & (~df_event["is_high"])].iloc[:5]
+        df_tracking = df_tracking[df_tracking["frame_id"].isin(df_passes["frame_id"])]
+        st.write("df_tracking B", df_tracking.shape)
+        st.write(df_tracking.head())
+
+        df_tracking["AS"], df_tracking["DAS"], df_tracking["result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
+            df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
+        )
+        df_passes["AS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["AS"].to_dict())
+        df_passes["DAS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["DAS"].to_dict())
+        df_passes["result_index"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["result_index"].to_dict())
+        st.write("df_passes D", df_passes.shape)
+        st.write(df_passes)
+
+        st.stop()
+
+
+        break
+
     # dfs_tracking = [dfs_tracking[1]]
     # dfs_event = [dfs_event[1]]
 
@@ -716,8 +1103,8 @@ def main():
             # break
 
     # validate()
-    n_steps = st.slider("Number of simulations", 1, 2000, 1)
-    validate_multiple_matches(dfs_tracking=dfs_tracking, dfs_passes=dfs_passes, outcome_col="success", n_steps=n_steps)
+    n_steps = st.number_input("Number of simulations", value=100)
+    validate_multiple_matches(dfs_tracking=[dfs_tracking[0]], dfs_passes=[dfs_passes[0]], outcome_col="success", n_steps=n_steps)
     return
 
     match, df_tracking, df_event = _get_preprocessed_data()

@@ -91,8 +91,8 @@ def get_matrix_coordinates(
 
 
 def per_object_frameify_tracking_data(
-        df_tracking, frame_col, x_cols, y_cols, vx_cols, vy_cols, players, player_to_team, new_x_col="x", new_y_col="y",
-        new_vx_col="vx", new_vy_col="vy", new_player_col="player_id", new_team_col="team_id", v_cols=None, new_v_col="v",
+    df_tracking, frame_col, x_cols, y_cols, vx_cols, vy_cols, players, player_to_team, new_x_col="x", new_y_col="y",
+    new_vx_col="vx", new_vy_col="vy", new_player_col="player_id", new_team_col="team_id", v_cols=None, new_v_col="v",
 ):
     """ Converts tracking data with '1 row per frame' into '1 row per frame + player' format """
     dfs_player = []
@@ -182,6 +182,7 @@ def get_expected_pass_completion(
     tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
     outcome_col="success",
+    use_tracking_ball_position=False,
 
     # xC Parameters
     exclude_passer=True,
@@ -211,9 +212,19 @@ def get_expected_pass_completion(
 
     # 1. Extract player and ball positions at passes
     assert set(df_passes[event_frame_col]).issubset(set(df_tracking[tracking_frame_col]))
-    i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
+
+    unique_frame_col = _get_unused_column_name(df_passes, "unique_frame")
+    df_passes[unique_frame_col] = np.arange(df_passes.shape[0])
+    df_tracking_passes = df_tracking.merge(df_passes[[event_frame_col, unique_frame_col]], on=event_frame_col, how="right").set_index(unique_frame_col)
+    df_passes = df_passes.set_index(unique_frame_col)
+
+    if not use_tracking_ball_position:
+        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_x_col] = df_passes[event_start_x_col]
+        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_y_col] = df_passes[event_start_y_col]
+
+    # i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
     PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
-        df_tracking.loc[i_pass_in_tracking], frame_col=tracking_frame_col, player_col=tracking_player_col,
+        df_tracking_passes.reset_index(), frame_col=unique_frame_col, player_col=tracking_player_col,
         ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
         vx_col=tracking_vx_col, vy_col=tracking_vy_col,
     )
@@ -245,9 +256,6 @@ def get_expected_pass_completion(
     else:
         passers_to_exclude = None
 
-    # st.write("df_passes", df_passes.shape)
-    # st.write(df_passes)
-
     # 5. Simulate passes to get expected completion
     simulation_result = dangerous_accessible_space.simulate_passes(
         # xC parameters
@@ -274,23 +282,60 @@ def get_expected_pass_completion(
     else:
         xc = simulation_result.prob_cum_att[:, 0, -1]  # F x PHI x T ---> F
 
-    outcomes = df_passes[outcome_col].values
-
-    brier = sklearn.metrics.brier_score_loss(outcomes, xc)
-    logloss = sklearn.metrics.log_loss(outcomes, xc, labels=[0, 1])
-    average_completion = np.mean(outcomes)
-    brier_baseline = np.mean((outcomes - average_completion)**2)
-    brier_skill_score = 1 - brier / brier_baseline
+    # outcomes = df_passes[outcome_col].values
+    # brier = sklearn.metrics.brier_score_loss(outcomes, xc)
+    # logloss = sklearn.metrics.log_loss(outcomes, xc, labels=[0, 1])
+    # average_completion = np.mean(outcomes)
+    # brier_baseline = np.mean((outcomes - average_completion)**2)
+    # brier_skill_score = 1 - brier / brier_baseline
 
     idx = df_passes[event_frame_col].map(frame_to_idx)
 
     return xc, idx, simulation_result
 
 
+def _dist_to_opp_goal(x_norm, y_norm):
+    MAX_GOAL_POST_RADIUS = 0.06
+    SEMI_GOAL_WIDTH_INNER_EDGE = 7.32 / 2
+    SEMI_GOAL_WIDTH_CENTER = SEMI_GOAL_WIDTH_INNER_EDGE + MAX_GOAL_POST_RADIUS
+    def _distance(x, y, x_target, y_target):
+        return np.sqrt((x - x_target) ** 2 + (y - y_target) ** 2)
+    x_goal = 52.5
+    y_goal = np.clip(y_norm, -SEMI_GOAL_WIDTH_CENTER, SEMI_GOAL_WIDTH_CENTER)
+    return _distance(x_norm, y_norm, x_goal, y_goal)
+
+
+def _opening_angle_to_goal(x, y):
+    MAX_GOAL_POST_RADIUS = 0.06
+    SEMI_GOAL_WIDTH_INNER_EDGE = 7.32 / 2
+    SEMI_GOAL_WIDTH_CENTER = SEMI_GOAL_WIDTH_INNER_EDGE + MAX_GOAL_POST_RADIUS
+
+    def angle_between(u, v):
+        divisor = np.linalg.norm(u, axis=0) * np.linalg.norm(v, axis=0)
+        i_div_0 = divisor == 0
+        divisor[i_div_0] = np.inf  # Avoid division by zero by setting divisor to inf
+        dot_product = np.sum(u * v, axis=0)
+        cosTh1 = dot_product / divisor
+        angle = np.arccos(cosTh1)
+        return angle
+
+    x_goal = 52.5
+    return np.abs(angle_between(np.array([x_goal - x, SEMI_GOAL_WIDTH_CENTER - y]), np.array([x_goal - x, -SEMI_GOAL_WIDTH_CENTER - y])))
+
+
+def _get_danger(dist_to_goal, opening_angle):
+    coef = np.array([-0.14447723, 0.40579492])
+    intercept = -0.52156283
+    logit = intercept + coef[0] * dist_to_goal + coef[1] * opening_angle
+    prob_true = 1 / (1 + np.exp(-logit))
+    return prob_true
+
+
 def get_dangerous_accessible_space(
     # Data
     df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
     ball_tracking_player_id="ball", tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx", tracking_vy_col="vy",
+    attacking_direction_col="attacking_direction",
 
     # Options
     apply_pitch_mask_to_raw_result=False,
@@ -310,7 +355,6 @@ def get_dangerous_accessible_space(
     F = PLAYER_POS.shape[0]
 
     phi_grid = np.tile(np.linspace(phi_offset, 2*np.pi+phi_offset, n_angles, endpoint=False), (F, 1))  # F x PHI
-
     v0_grid = np.tile(np.linspace(v0_min, v0_max, n_v0), (F, 1))  # F x V0
 
     simulation_result = dangerous_accessible_space.simulate_passes_chunked(
@@ -319,20 +363,29 @@ def get_dangerous_accessible_space(
     if apply_pitch_mask_to_raw_result:
         simulation_result = dangerous_accessible_space.mask_out_of_play(simulation_result)
 
+    # Add danger to simulation result
+    if attacking_direction_col is not None:
+        fr2playingdirection = df_tracking[[tracking_frame_col, attacking_direction_col]].set_index(tracking_frame_col).to_dict()[attacking_direction_col]
+        ATTACKING_DIRECTION = np.array([fr2playingdirection[frame] for frame in frame_to_idx])  # F
+    else:
+        ATTACKING_DIRECTION = np.ones(F)
+    X = simulation_result.x_grid
+    Y = simulation_result.y_grid
+    X_NORM = X * ATTACKING_DIRECTION[:, np.newaxis, np.newaxis]
+    Y_NORM = Y * ATTACKING_DIRECTION[:, np.newaxis, np.newaxis]
+    DIST_TO_GOAL = _dist_to_opp_goal(X_NORM, Y_NORM)
+    OPENING_ANGLE = _opening_angle_to_goal(X_NORM, Y_NORM)
+    DANGER = _get_danger(DIST_TO_GOAL, OPENING_ANGLE)
+    simulation_result = simulation_result._replace(danger=DANGER)
+
+    # Get AS and DAS
     accessible_space = dangerous_accessible_space.aggregate_surface_area(simulation_result)  # F
+    das = dangerous_accessible_space.aggregate_surface_area(simulation_result, add_danger=True)  # F
     fr2AS = pd.Series(accessible_space, index=df_tracking[tracking_frame_col].unique())
-    # df_tracking["AS"] = df_tracking[tracking_frame_col].map(fr2AS)
+    fr2DAS = pd.Series(das, index=df_tracking[tracking_frame_col].unique())
+    as_series = df_tracking[tracking_frame_col].map(fr2AS)
+    das_series = df_tracking[tracking_frame_col].map(fr2DAS)
 
-    # st.write("AS", accessible_space.shape, accessible_space)
-    # st.write("df_tracking", df_tracking.shape)
-    # st.write(df_tracking)
-    # dangerous_accessible_space = aggregate_surface_area(simulation_result_das)
-    # st.write("DAS", dangerous_accessible_space)
-    # df_passes["DAS"] = dangerous_accessible_space
-
-    accessible_space_series = df_tracking[tracking_frame_col].map(fr2AS)
     idx = df_tracking[tracking_frame_col].map(frame_to_idx)
 
-    return accessible_space_series, idx, simulation_result
-
-    # return simulation_result
+    return as_series, das_series, idx, simulation_result
