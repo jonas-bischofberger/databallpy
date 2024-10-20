@@ -389,3 +389,27 @@ def get_dangerous_accessible_space(
     idx = df_tracking[tracking_frame_col].map(frame_to_idx)
 
     return as_series, das_series, idx, simulation_result
+
+
+def infer_playing_direction(
+    df_tracking, team_col="team_id", period_col="period_id", possession_team_col="ball_possession", x_col="x",
+):
+    new_attacking_direction_col="attacking_direction",
+    """ Automatically infer playing direction based on the mean x position of each teams in each period. """
+    playing_direction = {}
+    for period_id, df_tracking_period in df_tracking.groupby(period_col):
+        x_mean = df_tracking_period.groupby(team_col)[x_col].mean()
+        smaller_x_team = x_mean.idxmin()
+        greater_x_team = x_mean.idxmax()
+        playing_direction[period_id] = {smaller_x_team: 1, greater_x_team: -1}
+
+    new_attacking_direction = pd.Series(index=df_tracking.index, dtype=np.float64)
+
+    for period_id in playing_direction:
+        i_period = df_tracking[period_col] == period_id
+        for team_id, direction in playing_direction[period_id].items():
+            i_period_team_possession = i_period & (df_tracking[possession_team_col] == team_id)
+            # df_tracking.loc[i_period_team_possession, new_attacking_direction_col] = direction
+            new_attacking_direction.loc[i_period_team_possession] = direction
+
+    return new_attacking_direction

@@ -988,52 +988,39 @@ def get_kloppy_events(dataset_nr):
         return df
 
 
+
+
 def main():
     st.write(f"Getting kloppy data...")
     dfs_tracking, dfs_event = get_kloppy_data()
 
+    importlib.reload(dangerous_accessible_space)
+
     for df_tracking, df_event in zip(dfs_tracking, dfs_event):
-        st.write("df_tracking A", df_tracking.shape)
-        st.write(df_tracking.head())
-        st.write("df_event", df_event.shape)
-        st.write(df_event)
+        df_tracking["attacking_direction"] = dangerous_accessible_space.infer_playing_direction(df_tracking)
+        df_event["attacking_direction"] = df_event["frame_id"].map(df_tracking.set_index("frame_id")["attacking_direction"].to_dict())
 
-        def get_playing_direction(df_tracking, team_col, period_col="period_id"):
-            playing_direction = {}
-            for period_id, df_tracking_period in df_tracking.groupby(period_col):
-                x_mean = df_tracking_period.groupby(team_col)["x"].mean()
-                smaller_x_team = x_mean.idxmin()
-                greater_x_team = x_mean.idxmax()
-                playing_direction[period_id] = {smaller_x_team: 1, greater_x_team: -1}
-            return playing_direction
-
-        playing_direction = get_playing_direction(df_tracking, "team_id")
-        df_tracking["x_norm"] = np.nan
-        df_tracking["y_norm"] = np.nan
-        for period_id in playing_direction:
-            i_period = df_tracking["period_id"] == period_id
-            for team_id, direction in playing_direction[period_id].items():
-                i_period_team_possession = i_period & (df_tracking["ball_possession"] == team_id)
-                df_tracking.loc[i_period_team_possession, "x_norm"] = df_tracking.loc[i_period_team_possession, "x"] * direction
-                df_tracking.loc[i_period_team_possession, "y_norm"] = df_tracking.loc[i_period_team_possession, "y"] * direction
-                df_tracking.loc[i_period_team_possession, "attacking_direction"] = direction
-
-        st.write("df_tracking.head(5)")
-        st.write(df_tracking.head(5))
-
-        df_passes = df_event[(df_event["is_pass"]) & (~df_event["is_high"])].iloc[:5]
+        df_passes = df_event[(df_event["is_pass"]) & (~df_event["is_high"])]
         df_tracking = df_tracking[df_tracking["frame_id"].isin(df_passes["frame_id"])]
-        st.write("df_tracking B", df_tracking.shape)
-        st.write(df_tracking.head())
-
         df_tracking["AS"], df_tracking["DAS"], df_tracking["result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
             df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
         )
         df_passes["AS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["AS"].to_dict())
         df_passes["DAS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["DAS"].to_dict())
         df_passes["result_index"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["result_index"].to_dict())
-        st.write("df_passes D", df_passes.shape)
-        st.write(df_passes)
+
+        # correlate x_norm and DAS
+        df_passes["x_norm"] = df_passes["coordinates_x"] * df_passes["attacking_direction"]
+        df_passes["y_norm"] = df_passes["coordinates_y"] * df_passes["attacking_direction"]
+        corr = df_passes[["x_norm", "DAS"]].corr().iloc[0, 1]
+        st.write("Correlation between x_norm and DAS", corr)
+
+        # plot it
+        fig, ax = plt.subplots()
+        ax.scatter(df_passes["x_norm"], df_passes["DAS"])
+        ax.set_xlabel("x_norm")
+        ax.set_ylabel("DAS")
+        st.pyplot(fig)
 
         st.stop()
 
