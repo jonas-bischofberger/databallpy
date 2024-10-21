@@ -394,7 +394,6 @@ def get_dangerous_accessible_space(
 def infer_playing_direction(
     df_tracking, team_col="team_id", period_col="period_id", possession_team_col="ball_possession", x_col="x",
 ):
-    new_attacking_direction_col="attacking_direction",
     """ Automatically infer playing direction based on the mean x position of each teams in each period. """
     playing_direction = {}
     for period_id, df_tracking_period in df_tracking.groupby(period_col):

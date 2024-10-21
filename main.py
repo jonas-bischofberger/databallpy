@@ -989,49 +989,44 @@ def get_kloppy_events(dataset_nr):
 
 
 
+def das_vs_xnorm(df_tracking, df_event):
+    df_tracking["attacking_direction"] = dangerous_accessible_space.infer_playing_direction(df_tracking)
+    df_event["attacking_direction"] = df_event["frame_id"].map(df_tracking.set_index("frame_id")["attacking_direction"].to_dict())
+
+    df_passes = df_event[(df_event["is_pass"]) & (~df_event["is_high"])]
+    df_tracking = df_tracking[df_tracking["frame_id"].isin(df_passes["frame_id"])]
+    df_tracking["AS"], df_tracking["DAS"], df_tracking[
+        "result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
+        df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
+    )
+    df_passes["AS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["AS"].to_dict())
+    df_passes["DAS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["DAS"].to_dict())
+    df_passes["result_index"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["result_index"].to_dict())
+
+    # correlate x_norm and DAS
+    df_passes["x_norm"] = df_passes["coordinates_x"] * df_passes["attacking_direction"]
+    df_passes["y_norm"] = df_passes["coordinates_y"] * df_passes["attacking_direction"]
+    corr = df_passes[["x_norm", "DAS"]].corr().iloc[0, 1]
+    st.write("Correlation between x_norm and DAS", corr)
+
+    # plot it
+    fig, ax = plt.subplots()
+    ax.scatter(df_passes["x_norm"], df_passes["DAS"])
+    ax.set_xlabel("x_norm")
+    ax.set_ylabel("DAS")
+    st.pyplot(fig)
+
 
 def main():
     st.write(f"Getting kloppy data...")
     dfs_tracking, dfs_event = get_kloppy_data()
 
-    importlib.reload(dangerous_accessible_space)
+    ### DAS vs x_norm
+    # for df_tracking, df_event in zip(dfs_tracking, dfs_event):
+    #     das_vs_xnorm(df_tracking, df_event)
+    #     break
 
-    for df_tracking, df_event in zip(dfs_tracking, dfs_event):
-        df_tracking["attacking_direction"] = dangerous_accessible_space.infer_playing_direction(df_tracking)
-        df_event["attacking_direction"] = df_event["frame_id"].map(df_tracking.set_index("frame_id")["attacking_direction"].to_dict())
-
-        df_passes = df_event[(df_event["is_pass"]) & (~df_event["is_high"])]
-        df_tracking = df_tracking[df_tracking["frame_id"].isin(df_passes["frame_id"])]
-        df_tracking["AS"], df_tracking["DAS"], df_tracking["result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
-            df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
-        )
-        df_passes["AS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["AS"].to_dict())
-        df_passes["DAS"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["DAS"].to_dict())
-        df_passes["result_index"] = df_passes["frame_id"].map(df_tracking.set_index("frame_id")["result_index"].to_dict())
-
-        # correlate x_norm and DAS
-        df_passes["x_norm"] = df_passes["coordinates_x"] * df_passes["attacking_direction"]
-        df_passes["y_norm"] = df_passes["coordinates_y"] * df_passes["attacking_direction"]
-        corr = df_passes[["x_norm", "DAS"]].corr().iloc[0, 1]
-        st.write("Correlation between x_norm and DAS", corr)
-
-        # plot it
-        fig, ax = plt.subplots()
-        ax.scatter(df_passes["x_norm"], df_passes["DAS"])
-        ax.set_xlabel("x_norm")
-        ax.set_ylabel("DAS")
-        st.pyplot(fig)
-
-        st.stop()
-
-
-        break
-
-    # dfs_tracking = [dfs_tracking[1]]
-    # dfs_event = [dfs_event[1]]
-
-    # dfs_tracking = datasets
-    # dfs_event = []
+    ### Validation
     dfs_passes = []
     for i, (df_tracking, df_events) in enumerate(zip(dfs_tracking, dfs_event)):
         df_events["player_id"] = df_events["player_id"].str.replace(" ", "")
