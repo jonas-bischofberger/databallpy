@@ -1,3 +1,4 @@
+import copy
 import json
 import functools
 import os.path
@@ -172,7 +173,7 @@ def check_synthetic_pass(p4ss, df_tracking_att, receiver_v):
     pass_length = math.sqrt((p4ss["coordinates_x"] - p4ss["end_coordinates_x"]) ** 2 + (p4ss["coordinates_y"] - p4ss["end_coordinates_y"]) ** 2)
     pass_duration = pass_length / v0_pass
 
-    if pass_duration < 0.2:
+    if pass_duration < 0.5 or pass_length < 15:
         return False
 
     df_tracking_att = df_tracking_att[(df_tracking_att["team_id"] == p4ss["team_id"])]
@@ -222,9 +223,9 @@ def check_synthetic_pass(p4ss, df_tracking_att, receiver_v):
 
 
 def add_synthetic_passes(
-        df_passes, df_tracking, n_synthetic_passes=5, event_frame_col="frame_id", tracking_frame_col="frame_id",
-        event_team_col="team_id", tracking_team_col="team_id", event_player_col="player_id", tracking_player_col="player_id",
-        new_is_synthetic_col="is_synthetic"
+    df_passes, df_tracking, n_synthetic_passes=5, event_frame_col="frame_id", tracking_frame_col="frame_id",
+    event_team_col="team_id", tracking_team_col="team_id", event_player_col="player_id", tracking_player_col="player_id",
+    new_is_synthetic_col="is_synthetic"
 ):
     st.write("add_synthetic_passes...")
     df_passes[new_is_synthetic_col] = False
@@ -289,7 +290,9 @@ def add_synthetic_passes(
     return pd.concat([df_passes, df_synthetic_passes], axis=0)
 
 
-def get_scores(df, baseline_accuracy, outcome_col="success"):
+def get_scores(_df, baseline_accuracy, outcome_col="success"):
+    df = _df.copy()
+
     data = {}
 
     # Descriptives
@@ -308,8 +311,12 @@ def get_scores(df, baseline_accuracy, outcome_col="success"):
         data["baseline_auc"] = np.nan
 
     if "xc" in df.columns:
+        data["avg_xc"] = df["xc"].mean()
         # Model scores
-        data["brier_score"] = sklearn.metrics.brier_score_loss(df[outcome_col], df["xc"])
+        data["brier_score"] = (df[outcome_col] - df["xc"]).pow(2).mean()
+
+        # data["brier_score"] = sklearn.metrics.brier_score_loss(df[outcome_col], df["xc"])
+
         try:
             data["logloss"] = sklearn.metrics.log_loss(df[outcome_col], df["xc"])
         except ValueError:
@@ -329,7 +336,10 @@ def get_scores(df, baseline_accuracy, outcome_col="success"):
         df_synth = df[df["is_synthetic"] == is_synthetic]
 
         if "xc" in df.columns:
-            data[f"brier_score_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], df_synth["xc"])
+            try:
+                data[f"brier_score_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], df_synth["xc"])
+            except ValueError:
+                data[f"brier_score_{synth_str}"] = np.nan
             try:
                 data[f"logloss_{synth_str}"] = sklearn.metrics.log_loss(df_synth[outcome_col], df_synth["xc"])
             except ValueError:
@@ -341,7 +351,10 @@ def get_scores(df, baseline_accuracy, outcome_col="success"):
 
         data[f"average_accuracy_{synth_str}"] = df_synth[outcome_col].mean()
         data[f"synthetic_share_{synth_str}"] = df_synth["is_synthetic"].mean()
-        data[f"baseline_brier_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
+        try:
+            data[f"baseline_brier_{synth_str}"] = sklearn.metrics.brier_score_loss(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
+        except ValueError:
+            data[f"baseline_brier_{synth_str}"] = np.nan
         try:
             data[f"baseline_loglos_{synth_str}"] = sklearn.metrics.log_loss(df_synth[outcome_col], [baseline_accuracy] * len(df_synth))
         except ValueError:
@@ -354,74 +367,146 @@ def get_scores(df, baseline_accuracy, outcome_col="success"):
     return data
 
 
+
+def bin_nr_calibration_plot(df, outcome_col="success", n_bins=None, binsize=None):
+    if binsize is None and n_bins is not None:
+        df["bin"] = pd.qcut(df["xc"], n_bins, labels=False, duplicates="drop")
+    elif binsize is not None and n_bins is None:
+        # Calculate the number of bins based on the specified binsize
+        min_val = df["xc"].min()
+        max_val = df["xc"].max()
+
+        # Create bins using pd.cut with float values
+        bin_edges = [min_val + i * binsize for i in range(int((max_val - min_val) / binsize) + 2)]
+        df["bin"] = pd.cut(df["xc"], bins=bin_edges, labels=False, include_lowest=True)
+    else:
+        raise ValueError("Either n_bins or binsize must be specified")
+
+    df_calibration = df.groupby("bin").agg({"success": "mean", "xc": "mean"}).reset_index()
+    df_calibration["bin"] = df_calibration["bin"] + 1
+    fig, ax = plt.subplots()
+    ax.plot(df_calibration["xc"], df_calibration["success"], marker="o")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="black")
+
+    # annotate each point with the number of samples
+    for i, row in df_calibration.iterrows():
+        count = len(df[df['bin'] == row['bin']])  # Count of samples in the bin
+        ax.annotate(
+            f"n={count}",  # Text to display
+            (row["xc"], row["success"]-0.03),  # Position of the text
+            bbox=dict(boxstyle='round,pad=0.3', edgecolor='black', facecolor='lightblue'),  # Text box styling
+            fontsize=8,  # Font size
+            ha='center',  # Horizontal alignment
+            va='center'  # Vertical alignment
+        )
+
+    ax.set_xlabel("Predicted probability")
+    ax.set_ylabel("Observed probability")
+    ax.set_title("Calibration plot")
+    return fig
+
+
 def validate_multiple_matches(
-    dfs_tracking, dfs_passes, n_steps=100, training_size=0.75,
+    dfs_tracking, dfs_passes, n_steps=100, training_size=0.7, use_prefit=True,
 
     outcome_col="success", tracking_team_col="team_id", event_team_col="team_id",
 ):
     random_state = 1893
 
+    use_event_ball_position = st.checkbox("Use event ball position for xC simulation", value=True)
     plot_synthetic_passes = st.button("Plot synthetic passes")
+    exclude_synthetic_passes_from_training_set = st.checkbox("Exclude synthetic passes from training set", value=False)
+    exclude_synthetic_passes_from_test_set = st.checkbox("Exclude synthetic passes from test set", value=False)
 
     ## Add synthetic passes
-    dfs_passes_with_synthetic = []
-    for df_tracking, df_passes in zip(dfs_tracking, dfs_passes):
-        # n_synthetic_passes = 5
-        n_synthetic_passes = len(df_passes[df_passes["success"]]) - len(df_passes[~df_passes["success"]])
-        st.write("n_synthetic_passes", n_synthetic_passes)
+    @st.cache_resource
+    def _get_dfs_passes_with_synthetic():
+        dfs_passes_with_synthetic = []
+        for df_tracking, df_passes in zip(dfs_tracking, dfs_passes):
+            # n_synthetic_passes = 5
+            n_synthetic_passes = len(df_passes[df_passes["success"]]) - len(df_passes[~df_passes["success"]])
+            st.write("n_synthetic_passes", n_synthetic_passes)
 
-        df_passes = add_synthetic_passes(df_passes, df_tracking, n_synthetic_passes=n_synthetic_passes, tracking_frame_col="frame_id", event_frame_col="frame_id")
-        dfs_passes_with_synthetic.append(df_passes)
+            df_passes = add_synthetic_passes(df_passes, df_tracking, n_synthetic_passes=n_synthetic_passes, tracking_frame_col="frame_id", event_frame_col="frame_id")
+            dfs_passes_with_synthetic.append(df_passes)
 
-        if plot_synthetic_passes:
-            columns = st.columns(2)
-            for pass_nr, (_, synthetic_pass) in enumerate(df_passes[df_passes["is_synthetic"]].iterrows()):
-                df_frame = df_tracking[df_tracking["frame_id"] == synthetic_pass["frame_id"]]
-                fig = plt.figure()
-                plt.arrow(synthetic_pass["coordinates_x"], synthetic_pass["coordinates_y"], synthetic_pass["end_coordinates_x"] - synthetic_pass["coordinates_x"], synthetic_pass["end_coordinates_y"] - synthetic_pass["coordinates_y"], head_width=1, head_length=1, fc='k', ec='k')
+            # if plot_synthetic_passes:
+            #     columns = st.columns(2)
+            #     for pass_nr, (_, synthetic_pass) in enumerate(df_passes[df_passes["is_synthetic"]].iterrows()):
+            #         df_frame = df_tracking[df_tracking["frame_id"] == synthetic_pass["frame_id"]]
+            #         fig = plt.figure()
+            #         plt.arrow(synthetic_pass["coordinates_x"], synthetic_pass["coordinates_y"], synthetic_pass["end_coordinates_x"] - synthetic_pass["coordinates_x"], synthetic_pass["end_coordinates_y"] - synthetic_pass["coordinates_y"], head_width=1, head_length=1, fc='k', ec='k')
+            #
+            #         plt.plot([-52.5, -52.5], [-34, 34], color="black", alpha=0.5)
+            #         plt.plot([52.5, 52.5], [-34, 34], color="black", alpha=0.5)
+            #         plt.plot([-52.5, 52.5], [-34, -34], color="black", alpha=0.5)
+            #         plt.plot([-52.5, 52.5], [34, 34], color="black", alpha=0.5)
+            #
+            #         df_frame_home = df_frame[df_frame[tracking_team_col] == synthetic_pass[event_team_col]]
+            #         plt.scatter(df_frame_home["x"], df_frame_home["y"], color="red", alpha=1)
+            #         df_frame_def = df_frame[(df_frame[tracking_team_col] != synthetic_pass[event_team_col]) & (df_frame[tracking_team_col].notna())]
+            #         plt.scatter(df_frame_def["x"], df_frame_def["y"], color="blue", alpha=1)
+            #         df_frame_ball = df_frame[df_frame[tracking_team_col].isna()]
+            #         plt.scatter(df_frame_ball["x"], df_frame_ball["y"], color="black", alpha=1, marker="x", s=100)
+            #
+            #         columns[pass_nr % 2].write(f"Pass {pass_nr} (frame {synthetic_pass['frame_id']})")
+            #         columns[pass_nr % 2].write(fig)
+            #
+            #         plt.close()
 
-                plt.plot([-52.5, -52.5], [-34, 34], color="black", alpha=0.5)
-                plt.plot([52.5, 52.5], [-34, 34], color="black", alpha=0.5)
-                plt.plot([-52.5, 52.5], [-34, -34], color="black", alpha=0.5)
-                plt.plot([-52.5, 52.5], [34, 34], color="black", alpha=0.5)
+        return dfs_passes_with_synthetic
 
-                df_frame_home = df_frame[df_frame[tracking_team_col] == synthetic_pass[event_team_col]]
-                plt.scatter(df_frame_home["x"], df_frame_home["y"], color="red", alpha=1)
-                df_frame_def = df_frame[(df_frame[tracking_team_col] != synthetic_pass[event_team_col]) & (df_frame[tracking_team_col].notna())]
-                plt.scatter(df_frame_def["x"], df_frame_def["y"], color="blue", alpha=1)
-                df_frame_ball = df_frame[df_frame[tracking_team_col].isna()]
-                plt.scatter(df_frame_ball["x"], df_frame_ball["y"], color="black", alpha=1, marker="x", s=100)
-
-                columns[pass_nr % 2].write(f"Pass {pass_nr} (frame {synthetic_pass['frame_id']})")
-                columns[pass_nr % 2].write(fig)
-
-                plt.close()
+    dfs_passes_with_synthetic = _get_dfs_passes_with_synthetic()
 
     ##
     dfs_training = []
     dfs_test = []
     for dataset_nr, df_passes in enumerate(dfs_passes_with_synthetic):
+        df_passes = df_passes.copy()
         dataset_nr_col = dangerous_accessible_space.interface._get_unused_column_name(df_passes, "dataset_nr")
         df_passes[dataset_nr_col] = dataset_nr
         df_passes["stratification_var"] = df_passes[outcome_col].astype(str) + "_" + df_passes["is_synthetic"].astype(str)
+
+        df_passes = df_passes.reset_index(drop=True)
+
+        df_passes["identifier"] = df_passes["dataset_nr"].astype(str) + "_" + df_passes.index.astype(str)
+
+        assert len(df_passes["identifier"]) == len(set(df_passes["identifier"]))
+        assert len(df_passes.index) == len(set(df_passes.index))
+
         df_training, df_test = sklearn.model_selection.train_test_split(df_passes, stratify=df_passes["stratification_var"], train_size=training_size, random_state=random_state)
-        # df_training, df_test = df_passes, df_passes
 
-        dfs_training.append(df_training)
-        dfs_test.append(df_test)
+        if exclude_synthetic_passes_from_training_set:
+            df_training = df_training[~df_training["is_synthetic"]]
+        if exclude_synthetic_passes_from_test_set:
+            df_test = df_test[~df_test["is_synthetic"]]
 
-    df_training = pd.concat(dfs_training)
-    df_test = pd.concat(dfs_test)
+        assert len(set(df_training.index).intersection(set(df_test.index))) == 0
+        assert len(set(df_training["identifier"]).intersection(set(df_test["identifier"]))) == 0
+
+        dfs_training.append(df_training.copy())
+        dfs_test.append(df_test.copy())
+
+    df_training = pd.concat(dfs_training).reset_index(drop=True).copy()
+    st.write("df_training", df_training.shape)
+    df_test = pd.concat(dfs_test).reset_index(drop=True).copy()
+    st.write("df_test", df_test.shape)
+
+    # assert no duplicate "identifier"
+    assert len(df_training["identifier"]) == len(set(df_training["identifier"]))
+    assert len(df_test["identifier"]) == len(set(df_test["identifier"]))
+    # assert no overlapping "identifier"
+    assert len(set(df_training["identifier"]).intersection(set(df_test["identifier"]))) == 0
 
     st.write("Number of training passes", len(df_training), f"avg. accuracy={df_training[outcome_col].mean():.1%}")
     st.write("Number of test passes", len(df_test), f"avg. accuracy={df_test[outcome_col].mean():.1%}")
 
     training_scores = get_scores(df_training, df_training[outcome_col].mean(), outcome_col=outcome_col)
-    test_scores = get_scores(df_test, df_training[outcome_col].mean(), outcome_col=outcome_col)
-    st.write("Training scores")
-    st.write(training_scores)
-    st.write("Test scores")
-    st.write(test_scores)
+    # test_scores = get_scores(df_test, df_training[outcome_col].mean(), outcome_col=outcome_col)
+    # st.write("Training scores")
+    # st.write(training_scores)
+    # st.write("Test scores")
+    # st.write(test_scores)
 
     def _choose_random_parameters(parameter_to_bounds):
         random_parameters = {}
@@ -444,7 +529,8 @@ def validate_multiple_matches(
         # "auc_synthetic": [],
         "brier_score_real": [],
         "logloss_real": [],
-        "auc_real": []
+        "auc_real": [],
+        "passes_json": [],
     }
     data.update({key: [] for key in training_scores.keys()})
     data["parameters"] = []
@@ -456,48 +542,51 @@ def validate_multiple_matches(
     for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
         progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
         progress_bar.progress((i+1) / n_steps)
-        random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
+        if use_prefit:
+            random_paramter_assignment = {}
+        else:
+            random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
 
         data_simres = {
             "xc": [],
             "success": [],
             "is_synthetic": [],
         }
+        dfs_training_passes = []
         for dataset_nr, df_training_passes in df_training.groupby("dataset_nr"):
-            df_tracking = dfs_tracking[dataset_nr]
-            df_training_passes = df_training_passes.sort_values("frame_id")
+            df_training_passes = df_training_passes.copy()
+            df_tracking = dfs_tracking[dataset_nr].copy()
             importlib.reload(dangerous_accessible_space)
             xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
-                df_training_passes, df_tracking, event_frame_col="frame_id", tracking_frame_col="frame_id", event_start_x_col="coordinates_x",
-                event_start_y_col="coordinates_y", event_end_x_col="end_coordinates_x", event_end_y_col="end_coordinates_y",
+                df_training_passes, df_tracking, event_frame_col="frame_id", tracking_frame_col="frame_id",
+                event_start_x_col="coordinates_x",
+                event_start_y_col="coordinates_y", event_end_x_col="end_coordinates_x",
+                event_end_y_col="end_coordinates_y",
                 event_team_col="team_id",
-                event_player_col="player_id", tracking_player_col="player_id", tracking_team_col="team_id", ball_tracking_player_id="ball",
+                event_player_col="player_id", tracking_player_col="player_id", tracking_team_col="team_id",
+                ball_tracking_player_id="ball",
                 tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx", tracking_vy_col="vy", tracking_v_col="v",
 
-                n_frames_after_pass_for_v0=5, fallback_v0=10,
+                n_frames_after_pass_for_v0=5, fallback_v0=10, use_event_ball_position=use_event_ball_position,
 
                 **random_paramter_assignment,
             )
-            data_simres["xc"].extend(xc)
+            df_training_passes["xc"] = xc.tolist()
+            data_simres["xc"].extend(xc.tolist())
             data_simres["success"].extend(df_training_passes[outcome_col].tolist())
             data_simres["is_synthetic"].extend(df_training_passes["is_synthetic"].tolist())
 
-        df_simres = pd.DataFrame(data_simres)
-        brier = sklearn.metrics.brier_score_loss(df_simres["success"], df_simres["xc"])
-        try:
-            logloss = sklearn.metrics.log_loss(df_simres["success"], df_simres["xc"])
-        except ValueError:
-            logloss = np.nan
-        try:
-            auc = sklearn.metrics.roc_auc_score(df_simres["success"], df_simres["xc"])
-        except ValueError:
-            auc = np.nan
+            print("lens data_simres", {k: len(v) for k, v in data_simres.items()})
 
-        # data["brier"].append(brier)
-        # data["logloss"].append(logloss)
-        # data["auc"].append(auc)
+            dfs_training_passes.append(df_training_passes.copy())
+
+        df_training_passes = pd.concat(dfs_training_passes)
+        training_passes_json = df_training_passes.to_json(orient="records")
+        data["passes_json"].append(training_passes_json)
+
+        df_simres = pd.DataFrame(data_simres)
         data["parameters"].append(random_paramter_assignment)
-        for key,value in random_paramter_assignment.items():
+        for key, value in random_paramter_assignment.items():
             data.setdefault(key, []).append(value)
 
         scores = get_scores(df_simres, df_training[outcome_col].mean(), outcome_col=outcome_col)
@@ -507,14 +596,58 @@ def validate_multiple_matches(
 
         display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
 
+        if use_prefit:
+            break
+
     df_training_results = pd.DataFrame(data)
     # st.write("df_training_results")
     # st.write(df_training_results)
 
     best_index = df_training_results["logloss"].idxmin()
     best_parameters = df_training_results["parameters"][best_index]
-    # st.write("Best parameters")
-    # st.write(best_parameters)
+    best_passes = df_training_results["passes_json"][best_index]
+    df_best_passes = pd.read_json(best_passes).copy()
+    df_best_passes["error"] = (df_best_passes["success"] - df_best_passes["xc"]).abs()
+
+    # st.write("df_best_passes")
+    # st.write(df_best_passes.sort_values("xc"))
+
+    st.write("### Training results")
+    st.write(bin_nr_calibration_plot(df_best_passes, outcome_col=outcome_col, n_bins=10))
+
+    for (text, df) in [
+        # ("Worst predictions", df_best_passes.sort_values("error", ascending=False)),
+        # ("Best predictions", df_best_passes.sort_values("error", ascending=True)),
+        ("Worst synthetic predictions", df_best_passes[df_best_passes["is_synthetic"]].sort_values("error", ascending=False)),
+        ("Best synthetic predictions", df_best_passes[df_best_passes["is_synthetic"]].sort_values("error", ascending=True)),
+        ("Worst real predictions", df_best_passes[~df_best_passes["is_synthetic"]].sort_values("error", ascending=False)),
+        ("Best real predictions", df_best_passes[~df_best_passes["is_synthetic"]].sort_values("error", ascending=True)),
+    ]:
+        with st.expander(text):
+            for pass_nr, (_, p4ss) in enumerate(df.iterrows()):
+                st.write("#### Pass", pass_nr, "xc=", p4ss["xc"], "success=", p4ss["success"], "error=", p4ss["error"], "is_synthetic=", p4ss["is_synthetic"])
+                st.write(p4ss)
+                plot_pass(p4ss, dfs_tracking[p4ss["dataset_nr"]])
+
+                if pass_nr > 20:
+                    break
+
+    # with st.expander("Worst predictions"):
+    #     for pass_nr, (_, p4ss) in enumerate(df_best_passes.sort_values("error", ascending=False).iterrows()):
+    #         # st.write("Pass", pass_nr, "xc=", p4ss["xc"], "success=", p4ss["success"], "error=", p4ss["error"], "is_synthetic=", p4ss["is_synthetic"])
+    #         st.write("#### Pass", pass_nr, "xc=", p4ss["xc"], "success=", p4ss["success"], "error=", p4ss["error"], "is_synthetic=", p4ss["is_synthetic"])
+    #         plot_pass(p4ss, dfs_tracking[p4ss["dataset_nr"]])
+    #
+    #         if pass_nr > 1:
+    #             break
+    #
+    # with st.expander("Best predictions"):
+    #     for pass_nr, (_, p4ss) in enumerate(df_best_passes.sort_values("error", ascending=True).iterrows()):
+    #         st.write("#### Pass", pass_nr, "xc=", p4ss["xc"], "success=", p4ss["success"], "error=", p4ss["error"], "is_synthetic=", p4ss["is_synthetic"])
+    #         plot_pass(p4ss, dfs_tracking[p4ss["dataset_nr"]])
+    #
+    #         if pass_nr > 1:
+    #             break
 
     data_simres = {
         "xc": [],
@@ -522,12 +655,8 @@ def validate_multiple_matches(
         "is_synthetic": [],
     }
     for dataset_nr, df_test_passes in df_test.groupby("dataset_nr"):
-        df_tracking = dfs_tracking[dataset_nr]
-        # st.write("df_tracking")
-        # st.write(df_tracking[["frame_id", "player_id", "team_id", "x", "y", "vx", "vy", "v"]].head(500))
-        # st.write("df_training_passes")
-        # st.write(df_training_passes[["frame_id", "player_id", "team_id", "coordinates_x", "coordinates_y", "end_coordinates_x", "end_coordinates_y"]])
-        df_training_passes = df_test_passes.sort_values("frame_id")
+        df_test_passes = df_test_passes.copy()
+        df_tracking = dfs_tracking[dataset_nr].copy()
         xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
             df_test_passes, df_tracking, event_frame_col="frame_id", tracking_frame_col="frame_id",
             event_start_x_col="coordinates_x",
@@ -537,71 +666,41 @@ def validate_multiple_matches(
             ball_tracking_player_id="ball",
             tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx", tracking_vy_col="vy", tracking_v_col="v",
 
-            n_frames_after_pass_for_v0=5, fallback_v0=10,
+            n_frames_after_pass_for_v0=5, fallback_v0=10, use_event_ball_position=use_event_ball_position,
 
             **best_parameters,
         )
         data_simres["xc"].extend(xc)
-        data_simres["success"].extend(df_training_passes[outcome_col].tolist())
-        data_simres["is_synthetic"].extend(df_training_passes["is_synthetic"].tolist())
+        data_simres["success"].extend(df_test_passes[outcome_col].tolist())
+        data_simres["is_synthetic"].extend(df_test_passes["is_synthetic"].tolist())
 
-    df_simres_test = pd.DataFrame(data_simres)
+    df_simres_test = pd.DataFrame(data_simres).copy()
 
-    test_scores = get_scores(df_simres_test, df_training[outcome_col].mean(), outcome_col=outcome_col)
-    st.write("test_scores")
-    st.write(test_scores)
+    test_scores = get_scores(df_simres_test.copy(), df_test[outcome_col].mean(), outcome_col=outcome_col)
+    st.write("### Test scores")
+    df_test_scores = pd.DataFrame(test_scores, index=[0])
+
+    # order cols like training
+    df_test_scores = df_test_scores[[col for col in df_training_results.columns if col in df_test_scores.columns]]
+
+    st.write("df_test_scores")
+    st.write(df_test_scores)
 
     st.write("df_simres_test")
     st.write(df_simres_test)
 
-    # do calibration plot
-    def bin_nr_calibration_plot(df, outcome_col="success", n_bins=None, binsize=None):
-        if binsize is None and n_bins is not None:
-            df["bin"] = pd.qcut(df["xc"], n_bins, labels=False, duplicates="drop")
-        elif binsize is not None and n_bins is None:
-            # Calculate the number of bins based on the specified binsize
-            min_val = df["xc"].min()
-            max_val = df["xc"].max()
+    st.write(bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=10))
 
-            # Create bins using pd.cut with float values
-            bin_edges = [min_val + i * binsize for i in range(int((max_val - min_val) / binsize) + 2)]
-            df["bin"] = pd.cut(df["xc"], bins=bin_edges, labels=False, include_lowest=True)
-        else:
-            raise ValueError("Either n_bins or binsize must be specified")
-
-        df_calibration = df.groupby("bin").agg({"success": "mean", "xc": "mean"}).reset_index()
-        df_calibration["bin"] = df_calibration["bin"] + 1
-        fig, ax = plt.subplots()
-        ax.plot(df_calibration["xc"], df_calibration["success"], marker="o")
-        ax.plot([0, 1], [0, 1], linestyle="--", color="black")
-
-        # annotate each point with the number of samples
-        for i, row in df_calibration.iterrows():
-            count = len(df[df['bin'] == row['bin']])  # Count of samples in the bin
-            ax.annotate(
-                f"n={count}",  # Text to display
-                (row["xc"], row["success"]-0.03),  # Position of the text
-                bbox=dict(boxstyle='round,pad=0.3', edgecolor='black', facecolor='lightblue'),  # Text box styling
-                fontsize=8,  # Font size
-                ha='center',  # Horizontal alignment
-                va='center'  # Vertical alignment
-            )
-
-        ax.set_xlabel("Predicted probability")
-        ax.set_ylabel("Observed probability")
-        ax.set_title("Calibration plot")
-        return fig
-
-    for n_bins in [5, 10, 20]:
-        st.write(f"Calibration plot with {n_bins} bins")
-        fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=n_bins)
-        st.pyplot(fig)
-
-    for binsize in [0.2, 0.1, 0.05]:
-        st.write(f"Calibration plot with binsize {binsize}")
-        fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, binsize=binsize)
-        st.pyplot(fig)
-
+    # for n_bins in [5, 10, 20]:
+    #     st.write(f"Calibration plot with {n_bins} bins")
+    #     fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=n_bins)
+    #     st.pyplot(fig)
+    #
+    # for binsize in [0.2, 0.1, 0.05]:
+    #     st.write(f"Calibration plot with binsize {binsize}")
+    #     fig = bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, binsize=binsize)
+    #     st.pyplot(fig)
+    #
     st.stop()
 
     # brier = sklearn.metrics.brier_score_loss(df_simres_test["success"], df_simres_test["xc"])
@@ -638,92 +737,92 @@ def validate_multiple_matches(
     # return
 
 
-def validate(n_steps=100, training_size=0.99):
-    _, df_tracking, df_event = _get_preprocessed_data()
-    df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
-
-    random_state = 1893
-    df_training, df_test = sklearn.model_selection.train_test_split(df_passes, train_size=training_size, random_state=random_state)
-
-    # df_training = df_passes
-    # df_test = df_passes
-
-    average_accuracy = df_training["outcome_col"].mean()
-    baseline_brier = sklearn.metrics.brier_score_loss(df_training["outcome"], [average_accuracy] * len(df_training))
-    st.write("Baseline brier", baseline_brier)
-    try:
-        baseline_logloss = sklearn.metrics.log_loss(df_training["outcome"], [average_accuracy] * len(df_training))
-    except ValueError:
-        baseline_logloss = np.nan
-    st.write("Baseline logloss", baseline_logloss)
-    baseline_auc = sklearn.metrics.roc_auc_score(df_training["outcome"], [average_accuracy] * len(df_training))
-    st.write("Baseline AUC", baseline_auc)
-
-    def _choose_random_parameters(parameter_to_bounds):
-        random_parameters = {}
-        for param, bounds in parameter_to_bounds.items():
-            # st.write("B", param, bounds, str(type(bounds[0])), str(type(bounds[-1])), "bool", isinstance(bounds[0], bool), isinstance(bounds[0], int), isinstance(bounds[0], float))
-            if isinstance(bounds[0], bool):  # order matters, bc bool is also int
-                random_parameters[param] = np.random.choice([bounds[0], bounds[-1]])
-            elif isinstance(bounds[0], int) or isinstance(bounds[0], float):
-                random_parameters[param] = np.random.uniform(bounds[0], bounds[-1])
-            else:
-                raise NotImplementedError(f"Unknown type: {type(bounds[0])}")
-        return random_parameters
-
-    data = {
-        "brier": [],
-        "logloss": [],
-        "auc": [],
-        "parameters": [],
-    }
-    progress_bar_text = st.empty()
-    progress_bar = st.progress(0)
-    display_df = st.empty()
-    for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
-        progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
-        progress_bar.progress((i+1) / n_steps)
-        random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
-        xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
-            df_training, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
-            event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
-            event_player_col="tracking_player_id",
-            **random_paramter_assignment,
-        )
-        brier = sklearn.metrics.brier_score_loss(df_training["outcome"], xc)
-        logloss = sklearn.metrics.log_loss(df_training["outcome"], xc)
-        auc = sklearn.metrics.roc_auc_score(df_training["outcome"], xc)
-        data["brier"].append(brier)
-        data["logloss"].append(logloss)
-        data["auc"].append(auc)
-        data["parameters"].append(random_paramter_assignment)
-        for parameter in random_paramter_assignment:
-            data.setdefault(parameter, []).append(random_paramter_assignment[parameter])
-        display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
-
-    df_training_results = pd.DataFrame(data)
-    st.write("df_training_results")
-    st.write(df_training_results)
-
-    best_index = df_training_results["logloss"].idxmin()
-    best_parameters = df_training_results["parameters"][best_index]
-    st.write("Best parameters")
-    st.write(best_parameters)
-
-    xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
-        df_test, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
-        event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
-        event_player_col="tracking_player_id",
-        **best_parameters,
-    )
-    brier = sklearn.metrics.brier_score_loss(df_test["outcome"], xc)
-    logloss = sklearn.metrics.log_loss(df_test["outcome"], xc)
-    auc = sklearn.metrics.roc_auc_score(df_test["outcome"], xc)
-    st.write("Test results")
-    st.write(f"Brier: {brier}")
-    st.write(f"Logloss: {logloss}")
-    st.write(f"AUC: {auc}")
-    return
+# def validate(n_steps=100, training_size=0.99):
+#     _, df_tracking, df_event = _get_preprocessed_data()
+#     df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
+#
+#     random_state = 1893
+#     df_training, df_test = sklearn.model_selection.train_test_split(df_passes, train_size=training_size, random_state=random_state)
+#
+#     # df_training = df_passes
+#     # df_test = df_passes
+#
+#     average_accuracy = df_training["outcome_col"].mean()
+#     baseline_brier = sklearn.metrics.brier_score_loss(df_training["outcome"], [average_accuracy] * len(df_training))
+#     st.write("Baseline brier", baseline_brier)
+#     try:
+#         baseline_logloss = sklearn.metrics.log_loss(df_training["outcome"], [average_accuracy] * len(df_training))
+#     except ValueError:
+#         baseline_logloss = np.nan
+#     st.write("Baseline logloss", baseline_logloss)
+#     baseline_auc = sklearn.metrics.roc_auc_score(df_training["outcome"], [average_accuracy] * len(df_training))
+#     st.write("Baseline AUC", baseline_auc)
+#
+#     def _choose_random_parameters(parameter_to_bounds):
+#         random_parameters = {}
+#         for param, bounds in parameter_to_bounds.items():
+#             # st.write("B", param, bounds, str(type(bounds[0])), str(type(bounds[-1])), "bool", isinstance(bounds[0], bool), isinstance(bounds[0], int), isinstance(bounds[0], float))
+#             if isinstance(bounds[0], bool):  # order matters, bc bool is also int
+#                 random_parameters[param] = np.random.choice([bounds[0], bounds[-1]])
+#             elif isinstance(bounds[0], int) or isinstance(bounds[0], float):
+#                 random_parameters[param] = np.random.uniform(bounds[0], bounds[-1])
+#             else:
+#                 raise NotImplementedError(f"Unknown type: {type(bounds[0])}")
+#         return random_parameters
+#
+#     data = {
+#         "brier": [],
+#         "logloss": [],
+#         "auc": [],
+#         "parameters": [],
+#     }
+#     progress_bar_text = st.empty()
+#     progress_bar = st.progress(0)
+#     display_df = st.empty()
+#     for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
+#         progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
+#         progress_bar.progress((i+1) / n_steps)
+#         random_paramter_assignment = _choose_random_parameters(dangerous_accessible_space.PARAMETER_BOUNDS)
+#         xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
+#             df_training, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
+#             event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
+#             event_player_col="tracking_player_id",
+#             **random_paramter_assignment,
+#         )
+#         brier = sklearn.metrics.brier_score_loss(df_training["outcome"], xc)
+#         logloss = sklearn.metrics.log_loss(df_training["outcome"], xc)
+#         auc = sklearn.metrics.roc_auc_score(df_training["outcome"], xc)
+#         data["brier"].append(brier)
+#         data["logloss"].append(logloss)
+#         data["auc"].append(auc)
+#         data["parameters"].append(random_paramter_assignment)
+#         for parameter in random_paramter_assignment:
+#             data.setdefault(parameter, []).append(random_paramter_assignment[parameter])
+#         display_df.write(pd.DataFrame(data).sort_values("logloss"), ascending=True)
+#
+#     df_training_results = pd.DataFrame(data)
+#     st.write("df_training_results")
+#     st.write(df_training_results)
+#
+#     best_index = df_training_results["logloss"].idxmin()
+#     best_parameters = df_training_results["parameters"][best_index]
+#     st.write("Best parameters")
+#     st.write(best_parameters)
+#
+#     xc, _, _ = dangerous_accessible_space.get_expected_pass_completion(
+#         df_test, df_tracking, event_frame_col="td_frame", tracking_frame_col="frame", event_start_x_col="start_x",
+#         event_start_y_col="start_y", event_end_x_col="end_x", event_end_y_col="end_y",
+#         event_player_col="tracking_player_id",
+#         **best_parameters,
+#     )
+#     brier = sklearn.metrics.brier_score_loss(df_test["outcome"], xc)
+#     logloss = sklearn.metrics.log_loss(df_test["outcome"], xc)
+#     auc = sklearn.metrics.roc_auc_score(df_test["outcome"], xc)
+#     st.write("Test results")
+#     st.write(f"Brier: {brier}")
+#     st.write(f"Logloss: {logloss}")
+#     st.write(f"AUC: {auc}")
+#     return
 
 
 import joblib
@@ -1017,6 +1116,43 @@ def das_vs_xnorm(df_tracking, df_event):
     st.pyplot(fig)
 
 
+def plot_pass(p4ss, df_tracking):
+    plt.figure()
+    plt.arrow(x=p4ss["coordinates_x"], y=p4ss["coordinates_y"], dx=p4ss["end_coordinates_x"] - p4ss["coordinates_x"],
+              dy=p4ss["end_coordinates_y"] - p4ss["coordinates_y"], head_width=1, head_length=1, fc="red", ec="red")
+    df_frame = df_tracking[df_tracking["frame_id"] == p4ss["frame_id"]]
+    for team in df_frame["team_id"].unique():
+        df_frame_team = df_frame[df_frame["team_id"] == team]
+        x = df_frame_team["x"].tolist()
+        y = df_frame_team["y"].tolist()
+        plt.scatter(x, y, c="red" if team == p4ss["team_id"] else "blue")
+
+        # plot velocity
+        vx = df_frame_team["vx"].tolist()
+        vy = df_frame_team["vy"].tolist()
+        for i in range(len(x)):
+            plt.arrow(x=x[i], y=y[i], dx=vx[i]/5, dy=vy[i]/5, head_width=0.5, head_length=0.5, fc="black", ec="black")
+
+    # plot passing start point with colored X
+    plt.scatter(p4ss["coordinates_x"], p4ss["coordinates_y"], c="red", marker="x", s=100)
+
+    # plot ball position
+    df_frame_ball = df_frame[df_frame["player_id"] == "ball"]
+    x_ball = df_frame_ball["x"].iloc[0]
+    y_ball = df_frame_ball["y"].iloc[0]
+    plt.scatter(x_ball, y_ball, c="black", marker="x", s=100)
+
+    plt.plot([-52.5, 52.5], [-34, -34], c="black")
+    plt.plot([-52.5, 52.5], [34, 34], c="black")
+    plt.plot([-52.5, -52.5], [-34, 34], c="black")
+    plt.plot([52.5, 52.5], [-34, 34], c="black")
+    plt.title(f"Pass: {p4ss['success']}")
+    st.write(plt.gcf())
+    # plt.show()
+    # st.stop()
+    # break
+
+
 def main():
     st.write(f"Getting kloppy data...")
     dfs_tracking, dfs_event = get_kloppy_data()
@@ -1065,28 +1201,14 @@ def main():
         dfs_passes.append(df_passes)
 
         for _, p4ss in df_passes.iloc[125:126].iterrows():
-            plt.figure()
-            plt.arrow(x=p4ss["coordinates_x"], y=p4ss["coordinates_y"], dx=p4ss["end_coordinates_x"] - p4ss["coordinates_x"], dy=p4ss["end_coordinates_y"] - p4ss["coordinates_y"], head_width=1, head_length=1, fc="blue", ec="blue")
-            df_frame = df_tracking[df_tracking["frame_id"] == p4ss["frame_id"]]
-            for team in df_frame["team_id"].unique():
-                df_frame_team = df_frame[df_frame["team_id"] == team]
-                x = df_frame_team["x"].tolist()
-                y = df_frame_team["y"].tolist()
-                plt.scatter(x, y, c="red" if team == p4ss["team_id"] else "blue")
-
-            plt.plot([-52.5, 52.5], [-34, -34], c="black")
-            plt.plot([-52.5, 52.5], [34, 34], c="black")
-            plt.plot([-52.5, -52.5], [-34, 34], c="black")
-            plt.plot([52.5, 52.5], [-34, 34], c="black")
-            plt.title(f"Pass: {p4ss['success']}")
-            st.write(plt.gcf())
-            # plt.show()
-            # st.stop()
-            # break
+            plot_pass(p4ss, df_tracking)
 
     # validate()
     n_steps = st.number_input("Number of simulations", value=100)
-    validate_multiple_matches(dfs_tracking=[dfs_tracking[0]], dfs_passes=[dfs_passes[0]], outcome_col="success", n_steps=n_steps)
+    use_prefit = st.checkbox("Use prefit", value=True)
+    validate_multiple_matches(
+        dfs_tracking=dfs_tracking, dfs_passes=dfs_passes, outcome_col="success", n_steps=n_steps, use_prefit=use_prefit
+    )
     return
 
     match, df_tracking, df_event = _get_preprocessed_data()

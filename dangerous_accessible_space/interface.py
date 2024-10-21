@@ -182,7 +182,7 @@ def get_expected_pass_completion(
     tracking_vy_col="vy", tracking_v_col=None, event_start_x_col="x", event_start_y_col="y",
     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
     outcome_col="success",
-    use_tracking_ball_position=False,
+    use_event_ball_position=False,
 
     # xC Parameters
     exclude_passer=True,
@@ -208,23 +208,25 @@ def get_expected_pass_completion(
     tol_distance=dangerous_accessible_space.DEFAULT_TOL_DISTANCE,
     use_approx_two_point=dangerous_accessible_space.DEFAULT_USE_APPROX_TWO_POINT,
 ):
-    df_passes = df_passes.sort_values(event_frame_col).copy()
+    df_tracking = df_tracking.copy()
 
     # 1. Extract player and ball positions at passes
     assert set(df_passes[event_frame_col]).issubset(set(df_tracking[tracking_frame_col]))
 
     unique_frame_col = _get_unused_column_name(df_passes, "unique_frame")
     df_passes[unique_frame_col] = np.arange(df_passes.shape[0])
-    df_tracking_passes = df_tracking.merge(df_passes[[event_frame_col, unique_frame_col]], on=event_frame_col, how="right").set_index(unique_frame_col)
-    df_passes = df_passes.set_index(unique_frame_col)
 
-    if not use_tracking_ball_position:
-        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_x_col] = df_passes[event_start_x_col]
-        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_y_col] = df_passes[event_start_y_col]
+    df_tracking_passes = df_passes[[event_frame_col, unique_frame_col]].merge(df_tracking, left_on=event_frame_col, right_on=tracking_frame_col, how="left")
+    if use_event_ball_position:
+        df_tracking_passes = df_tracking_passes.set_index(unique_frame_col)
+        df_passes_copy = df_passes.copy().set_index(unique_frame_col)
+        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_x_col] = df_passes_copy[event_start_x_col]
+        df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_y_col] = df_passes_copy[event_start_y_col]
+        df_tracking_passes = df_tracking_passes.reset_index()
 
     # i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
     PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
-        df_tracking_passes.reset_index(), frame_col=unique_frame_col, player_col=tracking_player_col,
+        df_tracking_passes, frame_col=unique_frame_col, player_col=tracking_player_col,
         ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
         vx_col=tracking_vx_col, vy_col=tracking_vy_col,
     )
