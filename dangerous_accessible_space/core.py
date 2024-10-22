@@ -6,6 +6,7 @@ import collections
 
 import dangerous_accessible_space.motion
 
+# Result object to hold simulation results
 _result_fields = [
     "poss_cum_att",  # F x PHI x T
     "prob_cum_att",  # F x PHI x T
@@ -15,6 +16,7 @@ _result_fields = [
     "prob_cum_def",  # F x PHI x T
     "poss_density_def",  # F x PHI x T
     "prob_density_def",  # F x PHI x T
+
     "phi_grid",  # PHI
     "r_grid",  # T
     "x_grid",  # F x PHI x T
@@ -24,142 +26,23 @@ _result_fields = [
 ]
 Result = collections.namedtuple("Result", _result_fields, defaults=[None] * len(_result_fields))
 
-# DEFAULT_B0 = -5
-# DEFAULT_B1 = -20
-# DEFAULT_PASS_START_LOCATION_OFFSET = 0
-# DEFAULT_TIME_OFFSET_BALL = 0
-# DEFAULT_SECONDS_TO_INTERCEPT = 0.1
-# DEFAULT_TOL_DISTANCE = 5
-# DEFAULT_PLAYER_VELOCITY = 7
-# DEFAULT_KEEP_INERTIAL_VELOCITY = True
-# DEFAULT_A_MAX = 14.256003027575932
-# DEFAULT_V_MAX = 12.865546440947865
-# DEFAULT_USE_MAX = False
-# DEFAULT_USE_APPROX_TWO_POINT = True
-# DEFAULT_INERTIAL_SECONDS = 0.2
-# DEFAULT_RADIAL_GRIDSIZE = 3
+# Default model parameters
+_DEFAULT_B0 = -1.3075312012275244
+_DEFAULT_B1 = -65.57184250749606
+_DEFAULT_PASS_START_LOCATION_OFFSET = 0.2821895970952328
+_DEFAULT_TIME_OFFSET_BALL = -0.09680365586691105
+_DEFAULT_TOL_DISTANCE = 2.5714050933456036
+_DEFAULT_PLAYER_VELOCITY = 3.984451038279267
+_DEFAULT_KEEP_INERTIAL_VELOCITY = True
+_DEFAULT_A_MAX = 14.256003027575932
+_DEFAULT_V_MAX = 12.865546440947865
+_DEFAULT_USE_MAX = True
+_DEFAULT_USE_APPROX_TWO_POINT = False  # True
+_DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
+_DEFAULT_RADIAL_GRIDSIZE = 3
 
-
-
-
-#             ### best (b0=-5, b1=-20, 9/0.2/5 MM, start=3, num=80, stop=22.5)
-#             fields = LowSpearmanLike(
-# #            b0=-5,
-# #             b1=-1,
-# #                 b0=-1,
-#             b0_att=0,
-#             b0_def=0,  # -0.5 best so far
-#
-#
-#             b1_att=-25,
-#             b1_def=-25,
-#             mm_player=models.motion.ApproxTwoPoint(
-#                 use_max=False, velocity=7,
-#                 inertial_seconds=0.25,
-#                 keep_inertial_velocity=True,
-#                 tol_distance=None,
-#             ),
-#             # mm_player=models.motion.ConstVel(7),
-#             mm_ball=models.motion.NoForce(),
-#             pass_selector=models.pass_selection.low.Uniform(
-#                 n_angles=4 * 30,  # Anzahl der Winkel durch 4 teilbar => ca. isotrop?
-#                 # velocity_range=np.linspace(start=3, stop=22.5, num=7, endpoint=True),
-#                 velocity_range=np.linspace(start=3, stop=22.5, num=60, endpoint=True),
-#                 mode="poss"  # TODO hier prob/poss unterscheidung rein
-#             ),
-#             ).get_field_matrix(
-#                 game, unit="dp", offside=False, single_half=0, single_fr=fr, gridsize=2,
-#             )
-
-DEFAULT_B0 = -1.3075312012275244
-DEFAULT_B1 = -65.57184250749606
-DEFAULT_PASS_START_LOCATION_OFFSET = 0.2821895970952328
-DEFAULT_TIME_OFFSET_BALL = -0.09680365586691105
-# DEFAULT_SECONDS_TO_INTERCEPT = 1.1650841463114299
-DEFAULT_TOL_DISTANCE = 2.5714050933456036
-DEFAULT_PLAYER_VELOCITY = 3.984451038279267
-DEFAULT_KEEP_INERTIAL_VELOCITY = True
-DEFAULT_A_MAX = 14.256003027575932
-DEFAULT_V_MAX = 12.865546440947865
-DEFAULT_USE_MAX = True
-DEFAULT_USE_APPROX_TWO_POINT = False #True
-DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
-DEFAULT_RADIAL_GRIDSIZE = 3
-
-
-#     pass_start_location_offset=DEFAULT_PASS_START_LOCATION_OFFSET,
-#     time_offset_ball=DEFAULT_TIME_OFFSET_BALL,
-#     radial_gridsize=DEFAULT_RADIAL_GRIDSIZE,
-#     # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
-#     b0=DEFAULT_B0,
-#     b1=DEFAULT_B1,
-#     player_velocity=DEFAULT_PLAYER_VELOCITY,
-#     keep_inertial_velocity=DEFAULT_KEEP_INERTIAL_VELOCITY,
-#     use_max=DEFAULT_USE_MAX,
-#     v_max=DEFAULT_V_MAX,
-#     a_max=DEFAULT_A_MAX,
-#     inertial_seconds=DEFAULT_INERTIAL_SECONDS,
-#     tol_distance=DEFAULT_TOL_DISTANCE,
-#     use_approx_two_point=DEFAULT_USE_APPROX_TWO_POINT,
-
-#     exclude_passer=True,
-#     use_poss=DEFAULT_USE_POSS_FOR_XC,
-#     use_fixed_v0=DEFAULT_USE_FIXED_V0_FOR_XC,
-#     v0_min=DEFAULT_V0_MIN_FOR_XC,
-#     v0_max=DEFAULT_V0_MAX_FOR_XC,
-#     n_v0=DEFAULT_N_V0_FOR_XC,
-# PARAMETER_BOUNDS_OK_RESULT = {
-#     # Core model
-#     "pass_start_location_offset": [0.001, 1],
-#     "time_offset_ball": [-0.0001, 0.0001],
-#     "radial_gridsize": [4.99, 5.01],
-#     "b0": [-10, 5],
-#     "b1": [-200, 0],
-#     "player_velocity": [2, 35],
-#     "keep_inertial_velocity": [False, True],  # , False],
-#     "use_max": [False, True],
-#     "v_max": [5, 40],
-#     "a_max": [10, 30],
-#     "inertial_seconds": [0.0, 1.5],  # , True],
-#     "tol_distance": [0, 7],
-#     "use_approx_two_point": [False, True],
-#
-#     # "t_max": [0.01, 20],
-#     # "d_max": [1, 10],
-#
-#     # "int_prob_mode": [False, True],
-#     # "seconds_to_intercept": [0.01, 5.5],
-#     # "tol_distance": [0, 20],
-#     # "inflation": [0.01, 100],
-#     # "use_inflation": [False],
-#
-#     # "dummy": [1, 10],
-#
-#     # "require_specific_receiver": [False],  # , True],#[False, True],  # , True],#, True],
-#
-#     # "use_const_v": [False],  # , True],  # [False, True],
-#     # "int_prob_mode": [False, True],  #, True],
-#     # "int_prob_mode": ["sigmoid"],  # ["sigmoid"],# "step", "expit"],  #, True],
-#     # "use_ramp": [False],  # , True],#, True],  #, True],
-#
-#     # "mean_aggregation": [False, True],
-#     # "n_angles": [0.51, 7.49],
-#
-#     # "dummy_variable": ["hallo"],
-#     # "b_over_m": [0, 0.05],
-#     # "recalibration_method": ["sigmoid", None],
-#     # "recalibration_method": [""],
-#
-#     # xC
-#     "exclude_passer": [False, True],
-#     "use_poss": [False, True],  # , True],#, True],
-#     "use_fixed_v0": [False, True],
-#     "v0_min": [1, 9.999],
-#     "v0_max": [5, 30],
-#     "n_v0": [0.5, 9.5],
-# }
 PARAMETER_BOUNDS = {
-    # Core model
+    # Core simulation model
     "pass_start_location_offset": [-5, 5],
     "time_offset_ball": [-5, 5],
     "radial_gridsize": [4.99, 5.01],
@@ -184,47 +67,55 @@ PARAMETER_BOUNDS = {
 }
 
 
-#
-
-def sigmoid(x):
+def _sigmoid(x):
     return 0.5 * (x / (1 + np.abs(x)) + 1)
-# def sigmoid(x):
-#     return 1 / (1 + np.exp(-x))
 
 
-def integrate_trapezoid(y, x):
-    return scipy.integrate.cumulative_trapezoid(y=y, x=x, initial=0, axis=-1)  # * radial_gridsize # F x V0 x PHI x T
+def _integrate_trapezoid(y, x):
+    return scipy.integrate.cumulative_trapezoid(y=y, x=x, initial=0, axis=-1)
+
+
+def _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list, passers_to_exclude=None):
+    F = PLAYER_POS.shape[0]
+    assert F == BALL_POS.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but BALL_POS shape is {BALL_POS.shape}"
+    assert F == phi_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but phi_grid shape is {phi_grid.shape}"
+    assert F == v0_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but v0_grid shape is {v0_grid.shape}"
+    assert F == passer_team.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but passer_team shape is {passer_team.shape}"
+    P = PLAYER_POS.shape[1]
+    assert P == team_list.shape[0], f"Dimension P is {P} (from PLAYER_POS: {PLAYER_POS.shape}), but team_list shape is {team_list.shape}"
+    assert PLAYER_POS.shape[2] >= 4  # >= or = ?
+    assert BALL_POS.shape[1] >= 2  # ...
+    if passers_to_exclude is not None:
+        assert F == passers_to_exclude.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but passers_to_exclude shape is {passers_to_exclude.shape}"
 
 
 def simulate_passes(
+    # Input data
     PLAYER_POS,  # F x P x 4[x, y, vx, vy], player positions
     BALL_POS,  # F x 2[x, y], ball positions
     phi_grid,  # F x PHI, pass angles
     v0_grid,  # F x V0, pass speeds
-    passer_teams,  # F, team of passers
+    passer_teams,  # F, frame-wise team of passers
     player_teams,  # P, player teams
     players=None,  # P, players
-    passers_to_exclude=None,  # F, passers IF we want to exclude them
+    passers_to_exclude=None,  # F, frame-wise passer, but only if we want to exclude the passer
 
-    pass_start_location_offset=DEFAULT_PASS_START_LOCATION_OFFSET,
-    time_offset_ball=DEFAULT_TIME_OFFSET_BALL,
-    radial_gridsize=DEFAULT_RADIAL_GRIDSIZE,
-    # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
-    b0=DEFAULT_B0,
-    b1=DEFAULT_B1,
-    player_velocity=DEFAULT_PLAYER_VELOCITY,
-    keep_inertial_velocity=DEFAULT_KEEP_INERTIAL_VELOCITY,
-    use_max=DEFAULT_USE_MAX,
-    v_max=DEFAULT_V_MAX,
-    a_max=DEFAULT_A_MAX,
-    inertial_seconds=DEFAULT_INERTIAL_SECONDS,
-    tol_distance=DEFAULT_TOL_DISTANCE,
-    use_approx_two_point=DEFAULT_USE_APPROX_TWO_POINT,
+    # Model parameters
+    pass_start_location_offset=_DEFAULT_PASS_START_LOCATION_OFFSET,
+    time_offset_ball=_DEFAULT_TIME_OFFSET_BALL,
+    radial_gridsize=_DEFAULT_RADIAL_GRIDSIZE,
+    b0=_DEFAULT_B0,
+    b1=_DEFAULT_B1,
+    player_velocity=_DEFAULT_PLAYER_VELOCITY,
+    keep_inertial_velocity=_DEFAULT_KEEP_INERTIAL_VELOCITY,
+    use_max=_DEFAULT_USE_MAX,
+    v_max=_DEFAULT_V_MAX,
+    a_max=_DEFAULT_A_MAX,
+    inertial_seconds=_DEFAULT_INERTIAL_SECONDS,
+    tol_distance=_DEFAULT_TOL_DISTANCE,
+    use_approx_two_point=_DEFAULT_USE_APPROX_TWO_POINT,
 ) -> Result:
-    # st.write("PLAYER_POS", PLAYER_POS.shape)
-    # st.write(PLAYER_POS[0, :, :])
-
-    """ Calculate the pass simulation model - Core functionality of this package """
+    """ Calculate the pass simulation model using numpy matrices - Core functionality of this package """
     _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams)
 
     ### 1. Calculate ball trajectory
@@ -267,74 +158,34 @@ def simulate_passes(
         )
 
     if passers_to_exclude is not None:
-        # st.write("players", players.shape)
-        # st.write(players)
-        # st.write("passers_to_exclude", passers_to_exclude.shape)
-        # st.write(passers_to_exclude)
         i_passers_to_exclude = np.array([list(players).index(passer) for passer in passers_to_exclude])
-        # st.write("i_passers_to_exclude", i_passers_to_exclude.shape)
         i_frames = np.arange(TTA_PLAYERS.shape[0])
         TTA_PLAYERS[i_frames, i_passers_to_exclude, :, :] = np.inf  # F x P x PHI x T
 
     TTA_PLAYERS = np.nan_to_num(TTA_PLAYERS, nan=np.inf)  # Handle players not participating in the game by setting their TTA to infinity
-    # st.write("T_BALL_SIM[fr=0, PHI=0, T=:]", T_BALL_SIM.shape)
-    # st.write(T_BALL_SIM[0, 0, :])
-    # st.write("TTA_PLAYERS[fr=0, P=:, PHI=0, T=:]", TTA_PLAYERS.shape)
-    # st.write(TTA_PLAYERS[0, :, 0, :])
 
     # 2.2 Transform time to arrive into interception rates
-    # seconds_to_intercept = 15
     X = TTA_PLAYERS[:, :, np.newaxis, :, :] - T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x P x PHI x T - F x PHI x T = F x P x V0 x PHI x T
-    # TIME_TO_CONTROL = np.maximum(0, (1 - np.exp(seconds_to_intercept * X)))  # F x P x V0 x PHI x T
-    # st.write("X[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
-    # st.write(X[0, :, 0, 0, :])
     X[:] = b0 + b1 * X  # 1 + 1 * F x P x V0 x PHI x T = F x P x V0 x PHI x T
-    X[:] = sigmoid(X)
+    X[:] = _sigmoid(X)
     X = np.nan_to_num(X, nan=0)  # F x P x V0 x PHI x T
-    # TIME_TO_CONTROL = np.nan_to_num(TIME_TO_CONTROL, nan=0)  # F x P x V0 x PHI x T
-    # st.write("TIME_TO_CONTROL[fr=0, P=:, V0=0, PHI=0, T=:]", TIME_TO_CONTROL.shape)
-    # st.write(TIME_TO_CONTROL[0, :, 0, 0, :])
-    X = X #* TIME_TO_CONTROL
-
-    # st.write("X(sigmoid)[fr=0, P=:, V0=0, PHI=0, T=:]", X.shape)
-    # st.write(X[0, :, 0, 0, :])
-    # st.write("seconds_to_intercept", seconds_to_intercept)
-    # ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
-    # ar_time = X / seconds_to_intercept  # F x P x V0 x PHI x T, interception rate / DR[np.newaxis, np.newaxis, np.newaxis, np.newaxis, :]
-    # st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape, ar_time.min(), ar_time.mean(), ar_time.max())
-    # st.write(ar_time[0, :, 0, 0, :])
+    X = X
     DT = T_BALL_SIM[:, :, 1] - T_BALL_SIM[:, :, 0]  # F x V0
     ar_time = X / DT[:, np.newaxis, :, np.newaxis, np.newaxis]  # F x P x V0 x PHI x T
-    # st.write("ar_time[fr=0, P=:, V0=0, PHI=0, T=:]", ar_time.shape, ar_time.min(), ar_time.mean(), ar_time.max())
-    # st.write(ar_time[0, :, 0, 0, :])
-
-    # st.write("DT", DT.shape, DT)
-    # ar_space = ar_time * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / radial_gridsize  # F x P x V0 x PHI x T
-    # st.write("ar_space[fr=0, P=:, V0=0, PHI=0, T=:]", ar_space.shape, ar_space.min(), ar_space.mean(), ar_space.max())
-    # st.write(ar_space[0, :, 0, 0, :])
-    # ar_time = ar_space
 
     ## 3. Use interception rates to calculate probabilities
     # 3.1 Sums of interception rates over players
     sum_ar = np.nansum(ar_time, axis=1)  # F x V0 x PHI x T
-    # st.write("sum_ar[fr=0, v0=0, phi=0, T=:]", sum_ar.shape)
-    # st.write(sum_ar[0, 0, 0, :])
 
     # poss-specific
     player_is_attacking = player_teams[np.newaxis, :] == passer_teams[:, np.newaxis]  # F x P
-    # x = np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    # y = np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0)  # F x P x V0 x PHI x T
-    # sum_ar_att = np.nansum(x, axis=1)  # F x V0 x PHI x T
-    # sum_ar_def = np.nansum(y, axis=1)  # F x V0 x PHI x T
     sum_ar_att = np.nansum(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0), axis=1)  # F x V0 x PHI x T
     sum_ar_def = np.nansum(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis], ar_time, 0), axis=1)  # F x V0 x PHI x T
 
     # poss-specific
-    int_sum_ar = integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    int_sum_ar_att = integrate_trapezoid(y=sum_ar_att, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    int_sum_ar_def = integrate_trapezoid(y=sum_ar_def, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
-    # st.write("int_sum_ar[fr=0, v0=0, phi=0, T=:]", int_sum_ar.shape)
-    # st.write(int_sum_ar[0, 0, 0, :])
+    int_sum_ar = _integrate_trapezoid(y=sum_ar, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
+    int_sum_ar_att = _integrate_trapezoid(y=sum_ar_att, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
+    int_sum_ar_def = _integrate_trapezoid(y=sum_ar_def, x=T_BALL_SIM[:, :, np.newaxis, :])  # F x V0 x PHI x T
 
     # Cumulative probabilities from integrals
     p0_cum = np.exp(-int_sum_ar) #if "prob" in ptypes else None  # F x V0 x PHI x T, cumulative probability that no one intercepted
@@ -343,28 +194,20 @@ def simulate_passes(
     p0_only_opp = np.where(
         player_is_attacking[:, :, np.newaxis, np.newaxis, np.newaxis],
         p0_cum_only_def[:, np.newaxis, :, :, :], p0_cum_only_att[:, np.newaxis, :, :, :]
-    ) #if "poss" in ptypes else None  # F x P x V0 x PHI x T
-    # st.write("p0_cum[fr=0, v0=0, phi=0, T=:]", p0_cum.shape)
-    # st.write(p0_cum[0, 0, 0, :])
-    # st.write("p0_cum_only_att[fr=0, v0=0, phi=0, T=:]", p0_cum_only_att.shape)
-    # st.write(p0_cum_only_att[0, 0, 0, :])
-    # st.write("p0_cum_only_def[fr=0, v0=0, phi=0, T=:]", p0_cum_only_def.shape)
-    # st.write(p0_cum_only_def[0, 0, 0, :])
-    # st.write("p0_only_opp[fr=0, p=:, v0=0, phi=0, T=:]", p0_only_opp.shape)
-    # st.write(p0_only_opp[0, :, 0, 0, :])
+    )  # F x P x V0 x PHI x T
 
     # Individual probability densities
     dpr_over_dt = p0_cum[:, np.newaxis, :, :, :] * ar_time  # if "prob" in ptypes else None  # F x P x V0 x PHI x T
-    pr_cum_prob = integrate_trapezoid(  # F x P x V0 x PHI x T, cumulative probability that player P intercepted
+    pr_cum_prob = _integrate_trapezoid(  # F x P x V0 x PHI x T, cumulative probability that player P intercepted
         y=dpr_over_dt,  # F x P x V0 x PHI x T
         x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
-    )  # if add_receiver else None
+    )
 
     dpr_poss_over_dt = p0_only_opp * ar_time  # if "poss" in ptypes else None  # F x P x V0 x PHI x T
-    pr_cum_poss = integrate_trapezoid(  # F x P x V0 x PHI x T
+    pr_cum_poss = _integrate_trapezoid(  # F x P x V0 x PHI x T
         y=dpr_poss_over_dt,  # F x P x V0 x PHI x T
         x=T_BALL_SIM[:, np.newaxis, :, np.newaxis, :]  # F x V0 x T
-    )  # if add_receiver else None
+    )
 
     dp0_over_dt = -p0_cum * sum_ar  # F x V0 x PHI x T
 
@@ -375,9 +218,7 @@ def simulate_passes(
     dp0_over_dx = dp0_over_dt * DT[:, np.newaxis, :, np.newaxis, np.newaxis] / DX
 
     # Aggregate over v0
-    # dpr_over_dx_vagg_prob = np.average(dpr_over_dt, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T, Take the average over all V0 in v0_grid
     dpr_over_dx_vagg_prob = np.average(dpr_over_dx, axis=2)  # if "prob" in ptypes else None  # F x P x PHI x T, Take the average over all V0 in v0_grid
-    # dpr_over_dx_vagg_poss = np.max(dpr_poss_over_dt, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
     dpr_over_dx_vagg_poss = np.max(dpr_poss_over_dx, axis=2)  # if "poss" in ptypes else None  # F x P x PHI x T, np.max not supported yet with numba using axis https://github.com/numba/numba/issues/1269
     dp0_over_dx_vagg = np.average(dp0_over_dx, axis=1)  # F x PHI x T
 
@@ -385,7 +226,6 @@ def simulate_passes(
     dpr_over_dx_vagg_poss_times_dx = dpr_over_dx_vagg_poss * DX  # F x P x PHI x T
     num_max = np.max(dpr_over_dx_vagg_poss_times_dx, axis=(1, 3))  # F x PHI
     dpr_over_dx_vagg_poss = dpr_over_dx_vagg_poss / num_max[:, np.newaxis, :, np.newaxis]  # F x P x PHI x T
-    # st.write("dpr_over_dx_vagg_poss", dpr_over_dx_vagg_poss.shape, np.min(dpr_over_dx_vagg_poss), np.max(dpr_over_dx_vagg_poss))
 
     # Normalize 2/4: prob density
     dpr_over_dx_vagg_prob_sum = np.sum(dpr_over_dx_vagg_prob * radial_gridsize, axis=(1, 3))  # F x PHI
@@ -394,13 +234,6 @@ def simulate_passes(
     p0_cum_vagg = np.mean(p0_cum, axis=1)  # if add_receiver else None  # F x PHI x T
     pr_cum_prob_vagg = np.mean(pr_cum_prob, axis=2)  # if add_receiver else None  # F x P x PHI x T
     pr_cum_poss_vagg = np.max(pr_cum_poss, axis=2)  # if add_receiver else None  # F x P x V0 x PHI x T -> F x P x V0 x PHI x T
-    # st.write("pr_cum_prob_vagg", pr_cum_prob_vagg.shape, np.max(pr_cum_prob_vagg))
-    # st.write(pr_cum_prob_vagg[0, :, 0, :])
-
-    # pr_cum_prob_vagg = np.minimum(pr_cum_prob_vagg, 1)
-    # pr_cum_poss_vagg = np.minimum(pr_cum_poss_vagg, 1)
-    # dpr_over_dx_vagg_prob = np.minimum(dpr_over_dx_vagg_prob, 1/radial_gridsize)
-    # dpr_over_dx_vagg_poss = np.minimum(dpr_over_dx_vagg_poss, 1/radial_gridsize)
 
     dpr_over_dx_vagg_att_prob = np.nanmax(np.where(player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_prob, 0), axis=1)  # F x PHI x T
     dpr_over_dx_vagg_def_prob = np.nanmax(np.where(~player_is_attacking[:, :, np.newaxis, np.newaxis], dpr_over_dx_vagg_prob, 0), axis=1)  # F x PHI x T
@@ -412,14 +245,6 @@ def simulate_passes(
     pr_cum_poss_att = np.maximum.accumulate(dpr_over_dx_vagg_att_poss, axis=2) * radial_gridsize  # possibility CDF uses cummax instead of cumsum to emerge from PDF
     pr_cum_poss_def = np.maximum.accumulate(dpr_over_dx_vagg_def_poss, axis=2) * radial_gridsize
 
-    # pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
-    # pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
-
-    # dpr_over_dx_vagg_att_poss[..., 0] = 1 / radial_gridsize
-    # dpr_over_dx_vagg_def_poss[..., 0] = 1 / radial_gridsize
-    # dpr_over_dx_vagg_def_poss[..., 0] = 1 / radial_gridsize
-    # dpr_over_dx_vagg_def_prob[..., 0] = 1 / radial_gridsize
-
     # normalize 1/4: prob cum
     p_sum = pr_cum_att + pr_cum_def + p0_cum_vagg
     pr_cum_att = pr_cum_att / p_sum
@@ -429,75 +254,65 @@ def simulate_passes(
     pr_cum_poss_att = np.minimum(pr_cum_poss_att, 1)
     pr_cum_poss_def = np.minimum(pr_cum_poss_def, 1)
 
-    # st.write("pr_cum_poss_att", pr_cum_poss_att.shape)
-    # st.write(pr_cum_poss_att[0, 0, :])
-    # st.write("pr_cum_att", pr_cum_att.shape)
-    # st.write(pr_cum_att[0, 0, :])
-    # st.write("pr_cum_def", pr_cum_def.shape)
-    # st.write(pr_cum_def[0, 0, :])
-    # st.write("pr_cum_poss_def", pr_cum_poss_def.shape)
-    # st.write(pr_cum_poss_def[0, 0, :])
-
-    # st.write("dpr_over_dx_vagg_att_poss", dpr_over_dx_vagg_att_poss.shape, np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
-    # st.write("dpr_over_dx_vagg_def_poss", dpr_over_dx_vagg_def_poss.shape, np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
-    # st.write("dpr_over_dx_vagg_att_prob", dpr_over_dx_vagg_att_prob.shape, np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
-    # st.write("dpr_over_dx_vagg_def_prob", dpr_over_dx_vagg_def_prob.shape, np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
-
-    # st.write("poss_cum_att", np.min(pr_cum_poss_att), np.max(pr_cum_poss_att))
-    # st.write("prob_cum_att", np.min(pr_cum_att), np.max(pr_cum_att))
-    # st.write("poss_density_att", np.min(dpr_over_dx_vagg_att_poss), np.max(dpr_over_dx_vagg_att_poss))
-    # st.write("prob_density_att", np.min(dpr_over_dx_vagg_att_prob), np.max(dpr_over_dx_vagg_att_prob))
-    # st.write("poss_cum_def", np.min(pr_cum_poss_def), np.max(pr_cum_poss_def))
-    # st.write("prob_cum_def", np.min(pr_cum_def), np.max(pr_cum_def))
-    # st.write("poss_density_def", np.min(dpr_over_dx_vagg_def_poss), np.max(dpr_over_dx_vagg_def_poss))
-    # st.write("prob_density_def", np.min(dpr_over_dx_vagg_def_prob), np.max(dpr_over_dx_vagg_def_prob))
-
     result = Result(
+        # Prob/poss (cumulative and densities) along simulated ball trajectories
         poss_cum_att=pr_cum_poss_att,  # F x PHI x T
         prob_cum_att=pr_cum_att,  # F x PHI x T
         poss_density_att=dpr_over_dx_vagg_att_poss,  # F x PHI x T
         prob_density_att=dpr_over_dx_vagg_att_prob,  # F x PHI x T
-        poss_cum_def=pr_cum_poss_def,  #pr_cum_poss_def,  # F x PHI x T
+        poss_cum_def=pr_cum_poss_def,  # F x PHI x T
         prob_cum_def=pr_cum_def,  # F x PHI x T
         poss_density_def=dpr_over_dx_vagg_def_poss,  # F x PHI x T
         prob_density_def=dpr_over_dx_vagg_def_prob,  # F x PHI x T
 
-        phi_grid=phi_grid, r_grid=D_BALL_SIM, x_grid=X_BALL_SIM, y_grid=Y_BALL_SIM
+        # Trajectory grids
+        phi_grid=phi_grid,  # F x PHI
+        r_grid=D_BALL_SIM,  # T
+        x_grid=X_BALL_SIM,  # F x PHI x T
+        y_grid=Y_BALL_SIM,  # F x PHI x T
+
+        # Danger
+        danger=None,  # can be filled later
     )
 
     return result
 
 
-def _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_team, team_list):
-    F = PLAYER_POS.shape[0]
-    assert F == BALL_POS.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but BALL_POS shape is {BALL_POS.shape}"
-    assert F == phi_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but phi_grid shape is {phi_grid.shape}"
-    assert F == v0_grid.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but v0_grid shape is {v0_grid.shape}"
-    assert F == passer_team.shape[0], f"Dimension F is {F} (from PLAYER_POS: {PLAYER_POS.shape}), but passer_team shape is {passer_team.shape}"
-    P = PLAYER_POS.shape[1]
-    assert P == team_list.shape[0], f"Dimension P is {P} (from PLAYER_POS: {PLAYER_POS.shape}), but team_list shape is {team_list.shape}"
-    assert PLAYER_POS.shape[2] >= 4  # >= or = ?
-    assert BALL_POS.shape[1] >= 2  # ...
-
-
 def simulate_passes_chunked(
     PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players=None, passers_to_exclude=None,
-    chunk_size=20
+    chunk_size=200, log=False,
+
+    # Model parameters
+    pass_start_location_offset = _DEFAULT_PASS_START_LOCATION_OFFSET,
+    time_offset_ball = _DEFAULT_TIME_OFFSET_BALL,
+    radial_gridsize = _DEFAULT_RADIAL_GRIDSIZE,
+    b0 = _DEFAULT_B0,
+    b1 = _DEFAULT_B1,
+    player_velocity = _DEFAULT_PLAYER_VELOCITY,
+    keep_inertial_velocity = _DEFAULT_KEEP_INERTIAL_VELOCITY,
+    use_max = _DEFAULT_USE_MAX,
+    v_max = _DEFAULT_V_MAX,
+    a_max = _DEFAULT_A_MAX,
+    inertial_seconds = _DEFAULT_INERTIAL_SECONDS,
+    tol_distance = _DEFAULT_TOL_DISTANCE,
+    use_approx_two_point = _DEFAULT_USE_APPROX_TWO_POINT,
 ) -> Result:
-    _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams)
+    """ Simulate passes in chunks to avoid OOM. """
+    _assert_matrices_validity(PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, passers_to_exclude)
 
     F = PLAYER_POS.shape[0]
 
     i_chunks = list(np.arange(0, F, chunk_size))
-    # i_chunks = np.arange(2000, 10000, chunk_size)
 
     full_result = None
-    progress_bar = st.progress(0)
-    progress_text = st.empty()
+    if log:
+        progress_bar = st.progress(0)
+        progress_text = st.empty()
 
     for chunk_nr, i in enumerate(i_chunks):
-        progress_text.text(f"Simulating chunk {chunk_nr + 1}/{len(i_chunks)}")
-        progress_bar.progress(chunk_nr / len(i_chunks))
+        if log:
+            progress_text.text(f"Simulating chunk {chunk_nr + 1}/{len(i_chunks)}")
+            progress_bar.progress(chunk_nr / len(i_chunks))
         i_chunk_end = min(i + chunk_size, F)
 
         PLAYER_POS_chunk = PLAYER_POS[i:i_chunk_end, ...]
@@ -505,10 +320,35 @@ def simulate_passes_chunked(
         phi_grid_chunk = phi_grid[i:i_chunk_end, ...]
         v0_grid_chunk = v0_grid[i:i_chunk_end, ...]
         passer_team_chunk = passer_teams[i:i_chunk_end, ...]
+        if passers_to_exclude is not None:
+            passers_to_exclude_chunk = passers_to_exclude[i:i_chunk_end, ...]
+        else:
+            passers_to_exclude_chunk = None
+
+        # st.write("PLAYER_POS_chunk", PLAYER_POS_chunk.shape)
+        # st.write("BALL_POS_chunk", BALL_POS_chunk.shape)
+        # st.write("phi_grid_chunk", phi_grid_chunk.shape)
+        # st.write("v0_grid_chunk", v0_grid_chunk.shape)
+        # st.write("passer_team_chunk", passer_team_chunk.shape)
+        # st.write("player_teams", player_teams.shape)
 
         result = simulate_passes(
             PLAYER_POS_chunk, BALL_POS_chunk, phi_grid_chunk, v0_grid_chunk, passer_team_chunk, player_teams, players,
-            passers_to_exclude
+            passers_to_exclude_chunk,
+
+            pass_start_location_offset,
+            time_offset_ball,
+            radial_gridsize,
+            b0,
+            b1,
+            player_velocity,
+            keep_inertial_velocity,
+            use_max,
+            v_max,
+            a_max,
+            inertial_seconds,
+            tol_distance,
+            use_approx_two_point,
         )
 
         if full_result is None:
@@ -534,16 +374,20 @@ def simulate_passes_chunked(
                 prob_cum_def=full_p_cum_def,
                 poss_density_def=full_p_density_def,
                 prob_density_def=full_prob_density_def,
+
                 phi_grid=full_phi,
                 r_grid=full_result.r_grid,
                 x_grid=full_x0,
-                y_grid=full_y0
+                y_grid=full_y0,
+
+                danger=None,
             )
 
     return full_result
 
 
 def mask_out_of_play(simulation_result: Result) -> Result:
+    """ Remove out of play area from simulation """
     x = simulation_result.x_grid
     y = simulation_result.y_grid
 
@@ -562,10 +406,11 @@ def mask_out_of_play(simulation_result: Result) -> Result:
     return simulation_result
 
 
-def aggregate_surface_area(result, add_danger=False):
+def aggregate_surface_area(result: Result, add_danger=False):
+    """ Integrate simulation result to obtain surface area (AS/DAS) """
     result = mask_out_of_play(result)
 
-    # Get r-part of area elements
+    # 1. Get r-part of area elements
     r_grid = result.r_grid  # T
 
     r_lower_bounds = np.zeros_like(r_grid)  # Initialize with zeros
@@ -578,10 +423,8 @@ def aggregate_surface_area(result, add_danger=False):
 
     dr = r_upper_bounds - r_lower_bounds  # T
 
-    # Get phi-part of area elements
+    # 2. Get phi-part of area elements
     phi_grid = result.phi_grid  # F x PHI
-
-    # dA = np.diff(phi_grid, axis=1) * r_grid[:, np.newaxis]  # F x PHI-1 x T
 
     phi_lower_bounds = np.zeros_like(phi_grid)  # F x PHI
     phi_lower_bounds[:, 1:] = (phi_grid[:, :-1] + phi_grid[:, 1:]) / 2  # Midpoint between current and previous element
@@ -593,13 +436,13 @@ def aggregate_surface_area(result, add_danger=False):
 
     dphi = phi_upper_bounds - phi_lower_bounds  # F x PHI
 
+    # 3. Calculate area elements
     outer_bound_circle_slice_area = dphi[:, :, np.newaxis]/(2*np.pi) * (np.pi * r_upper_bounds[np.newaxis, np.newaxis, :]**2)  # T
     inner_bound_circle_slice_area = dphi[:, :, np.newaxis]/(2*np.pi) * (np.pi * r_lower_bounds[np.newaxis, np.newaxis, :]**2)  # T
-
     dA = outer_bound_circle_slice_area - inner_bound_circle_slice_area  # F x PHI x T
 
+    # 4. Calculate surface area
     p = result.poss_density_att * dr
-
     if add_danger:
         danger = result.danger
         DAS = np.sum(p * dA * danger, axis=(1, 2))  # F

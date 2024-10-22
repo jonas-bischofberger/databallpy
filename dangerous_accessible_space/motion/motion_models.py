@@ -11,7 +11,6 @@ def constent_velocity_time_to_arrive(x, y, x_target, y_target, player_velocity=9
     return D / V
 
 
-
 def approx_two_point_time_to_arrive(
         x, y, vx, vy, x_target, y_target, use_max=False, velocity=9, keep_inertial_velocity=True,
         v_max=9, a_max=10, inertial_seconds=0.5, tol_distance=None

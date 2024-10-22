@@ -1,31 +1,29 @@
-import os
-import sys
-
-sys.path.append(os.path.join(os.path.dirname(__file__), '.'))
-
-import pandas as pd
-
-import sklearn.metrics
 import numpy as np
+import pandas as pd
+import colorsys
+import matplotlib.pyplot as plt
+import matplotlib.tri
+import matplotlib.colors
 
-import assets.test_data
-import streamlit as st
+from .assets import test_data
+from .core import _DEFAULT_PASS_START_LOCATION_OFFSET, _DEFAULT_B0, _DEFAULT_TIME_OFFSET_BALL, _DEFAULT_A_MAX, \
+    _DEFAULT_USE_MAX, _DEFAULT_USE_APPROX_TWO_POINT, _DEFAULT_B1, _DEFAULT_PLAYER_VELOCITY, _DEFAULT_V_MAX, \
+    _DEFAULT_KEEP_INERTIAL_VELOCITY, _DEFAULT_INERTIAL_SECONDS, _DEFAULT_TOL_DISTANCE, _DEFAULT_RADIAL_GRIDSIZE, \
+    simulate_passes_chunked, simulate_passes, mask_out_of_play, aggregate_surface_area
 
-import dangerous_accessible_space.core
+_DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0 = 3
+_DEFAULT_FALLBACK_V0 = 10
+_DEFAULT_USE_POSS_FOR_XC = False
+_DEFAULT_USE_FIXED_V0_FOR_XC = True
+_DEFAULT_V0_MAX_FOR_XC = 15.108273248071049
+_DEFAULT_V0_MIN_FOR_XC = 4.835618861117393
+_DEFAULT_N_V0_FOR_XC = 6
 
-DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0 = 3
-DEFAULT_FALLBACK_V0 = 10
-DEFAULT_USE_POSS_FOR_XC = False  # False
-DEFAULT_USE_FIXED_V0_FOR_XC = True
-DEFAULT_V0_MAX_FOR_XC = 15.108273248071049
-DEFAULT_V0_MIN_FOR_XC = 4.835618861117393
-DEFAULT_N_V0_FOR_XC = 6
-
-DEFAULT_N_ANGLES_FOR_DAS = 60
-DEFAULT_PHI_OFFSET = 0
-DEFAULT_N_V0_FOR_DAS = 20
-DEFAULT_V0_MIN_FOR_DAS = 3#0.01
-DEFAULT_V0_MAX_FOR_DAS = 30
+_DEFAULT_N_ANGLES_FOR_DAS = 60
+_DEFAULT_PHI_OFFSET = 0
+_DEFAULT_N_V0_FOR_DAS = 20
+_DEFAULT_V0_MIN_FOR_DAS = 3
+_DEFAULT_V0_MAX_FOR_DAS = 30
 
 
 def get_matrix_coordinates(
@@ -35,7 +33,7 @@ def get_matrix_coordinates(
     """
     Convert tracking data from a DataFrame to numpy matrices as used internally to compute the passing model.
 
-    >>> assets.test_data.df_tracking
+    >>> test_data.df_tracking
          frame_id player_id  team_id    x     y   vx    vy
     0           0         A      0.0 -0.1  0.00  0.1  0.05
     1           1         A      0.0  0.0  0.05  0.1  0.05
@@ -50,7 +48,7 @@ def get_matrix_coordinates(
     118        19      ball      NaN  1.9  0.00  0.1  0.00
     <BLANKLINE>
     [119 rows x 7 columns]
-    >>> PLAYER_POS, BALL_POS, player_list, team_indices = _get_matrix_coordinates(assets.test_data.df_tracking)
+    >>> PLAYER_POS, BALL_POS, player_list, team_indices = get_matrix_coordinates(test_data.df_tracking)
     >>> PLAYER_POS.shape, BALL_POS.shape, players.shape, player_teams.shape
     ((20, 5, 4), (20, 4), (5,), (5,))
     """
@@ -130,14 +128,14 @@ def _get_unused_column_name(df, prefix):
 
 def get_pass_velocity(
     df_passes, df_tracking_ball, event_frame_col="frame_id", tracking_frame_col="frame_id",
-    n_frames_after_pass_for_v0=DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0, fallback_v0=DEFAULT_FALLBACK_V0, tracking_vx_col="vx",
+    n_frames_after_pass_for_v0=_DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0, fallback_v0=_DEFAULT_FALLBACK_V0, tracking_vx_col="vx",
     tracking_vy_col="vy", tracking_v_col=None
 ):
     """
     Add initial velocity to passes according to the first N frames of ball tracking data after the pass
 
-    >>> df_passes = assets.test_data.df_passes
-    >>> df_passes["v0"] = get_pass_velocity(df_passes, assets.test_data.df_tracking[assets.test_data.df_tracking["player_id"] == "ball"])
+    >>> df_passes = test_data.df_passes
+    >>> df_passes["v0"] = get_pass_velocity(df_passes, test_data.df_tracking[test_data.df_tracking["player_id"] == "ball"])
     >>> df_passes
        frame_id player_id receiver_id  ...  y_target  pass_outcome   v0
     0         0         A           B  ...        11    successful  0.1
@@ -183,30 +181,30 @@ def get_expected_pass_completion(
     event_end_x_col="x_target", event_end_y_col="y_target", event_team_col="team_id", event_player_col="",
     outcome_col="success",
     use_event_ball_position=False,
+    chunk_size=200,
 
     # xC Parameters
     exclude_passer=True,
-    use_poss=DEFAULT_USE_POSS_FOR_XC,
-    use_fixed_v0=DEFAULT_USE_FIXED_V0_FOR_XC,
-    v0_min=DEFAULT_V0_MIN_FOR_XC,
-    v0_max=DEFAULT_V0_MAX_FOR_XC,
-    n_v0=DEFAULT_N_V0_FOR_XC,
+    use_poss=_DEFAULT_USE_POSS_FOR_XC,
+    use_fixed_v0=_DEFAULT_USE_FIXED_V0_FOR_XC,
+    v0_min=_DEFAULT_V0_MIN_FOR_XC,
+    v0_max=_DEFAULT_V0_MAX_FOR_XC,
+    n_v0=_DEFAULT_N_V0_FOR_XC,
 
     # Core model parameters
-    pass_start_location_offset=dangerous_accessible_space.DEFAULT_PASS_START_LOCATION_OFFSET,
-    time_offset_ball=dangerous_accessible_space.DEFAULT_TIME_OFFSET_BALL,
-    radial_gridsize=dangerous_accessible_space.DEFAULT_RADIAL_GRIDSIZE,
-    # seconds_to_intercept=DEFAULT_SECONDS_TO_INTERCEPT,
-    b0=dangerous_accessible_space.DEFAULT_B0,
-    b1=dangerous_accessible_space.DEFAULT_B1,
-    player_velocity=dangerous_accessible_space.DEFAULT_PLAYER_VELOCITY,
-    keep_inertial_velocity=dangerous_accessible_space.DEFAULT_KEEP_INERTIAL_VELOCITY,
-    use_max=dangerous_accessible_space.DEFAULT_USE_MAX,
-    v_max=dangerous_accessible_space.DEFAULT_V_MAX,
-    a_max=dangerous_accessible_space.DEFAULT_A_MAX,
-    inertial_seconds=dangerous_accessible_space.DEFAULT_INERTIAL_SECONDS,
-    tol_distance=dangerous_accessible_space.DEFAULT_TOL_DISTANCE,
-    use_approx_two_point=dangerous_accessible_space.DEFAULT_USE_APPROX_TWO_POINT,
+    pass_start_location_offset=_DEFAULT_PASS_START_LOCATION_OFFSET,
+    time_offset_ball=_DEFAULT_TIME_OFFSET_BALL,
+    radial_gridsize=_DEFAULT_RADIAL_GRIDSIZE,
+    b0=_DEFAULT_B0,
+    b1=_DEFAULT_B1,
+    player_velocity=_DEFAULT_PLAYER_VELOCITY,
+    keep_inertial_velocity=_DEFAULT_KEEP_INERTIAL_VELOCITY,
+    use_max=_DEFAULT_USE_MAX,
+    v_max=_DEFAULT_V_MAX,
+    a_max=_DEFAULT_A_MAX,
+    inertial_seconds=_DEFAULT_INERTIAL_SECONDS,
+    tol_distance=_DEFAULT_TOL_DISTANCE,
+    use_approx_two_point=_DEFAULT_USE_APPROX_TWO_POINT,
 ):
     df_tracking = df_tracking.copy()
 
@@ -224,8 +222,7 @@ def get_expected_pass_completion(
         df_tracking_passes.loc[df_tracking_passes[tracking_player_col] == ball_tracking_player_id, tracking_y_col] = df_passes_copy[event_start_y_col]
         df_tracking_passes = df_tracking_passes.reset_index()
 
-    # i_pass_in_tracking = df_tracking[tracking_frame_col].isin(df_passes[event_frame_col])
-    PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
+    PLAYER_POS, BALL_POS, players, player_teams, _, frame_to_idx = get_matrix_coordinates(
         df_tracking_passes, frame_col=unique_frame_col, player_col=tracking_player_col,
         ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
         vx_col=tracking_vx_col, vy_col=tracking_vy_col,
@@ -239,7 +236,6 @@ def get_expected_pass_completion(
         n_frames_after_pass_for_v0=n_frames_after_pass_for_v0, fallback_v0=fallback_v0, tracking_vx_col=tracking_vx_col,
         tracking_vy_col=tracking_vy_col, tracking_v_col=tracking_v_col
     )
-    # v0_grid = df_passes[v0_col].values[:, np.newaxis]  # F x V0
     if use_fixed_v0:
         v0_grid = np.linspace(start=v0_min, stop=v0_max, num=round(n_v0))[np.newaxis, :].repeat(df_passes.shape[0], axis=0)  # F x V0
     else:
@@ -253,13 +249,14 @@ def get_expected_pass_completion(
     # 4. Extract player team info
     passer_teams = df_passes[event_team_col].values  # F
     player_teams = np.array(player_teams)  # P
+    import streamlit as st
     if exclude_passer:
         passers_to_exclude = df_passes[event_player_col].values  # F
     else:
         passers_to_exclude = None
 
     # 5. Simulate passes to get expected completion
-    simulation_result = dangerous_accessible_space.simulate_passes(
+    simulation_result = simulate_passes_chunked(
         # xC parameters
         PLAYER_POS, BALL_POS, phi_grid, v0_grid, passer_teams, player_teams, players,
         passers_to_exclude=passers_to_exclude,
@@ -278,6 +275,10 @@ def get_expected_pass_completion(
         inertial_seconds=inertial_seconds,
         tol_distance=tol_distance,
         use_approx_two_point=use_approx_two_point,
+
+        # Chunk size
+        chunk_size=chunk_size,
+        log=False,
     )
     if use_poss:
         xc = simulation_result.poss_cum_att[:, 0, -1]  # F x PHI x T ---> F
@@ -326,9 +327,9 @@ def _opening_angle_to_goal(x, y):
 
 
 def _get_danger(dist_to_goal, opening_angle):
-    coef = np.array([-0.14447723, 0.40579492])
+    coefficients = [-0.14447723, 0.40579492]
     intercept = -0.52156283
-    logit = intercept + coef[0] * dist_to_goal + coef[1] * opening_angle
+    logit = intercept + coefficients[0] * dist_to_goal + coefficients[1] * opening_angle
     prob_true = 1 / (1 + np.exp(-logit))
     return prob_true
 
@@ -343,13 +344,13 @@ def get_dangerous_accessible_space(
     apply_pitch_mask_to_raw_result=False,
 
     # Parameters
-    n_angles=DEFAULT_N_ANGLES_FOR_DAS,
-    phi_offset=DEFAULT_PHI_OFFSET,
-    n_v0=DEFAULT_N_V0_FOR_DAS,
-    v0_min=DEFAULT_V0_MIN_FOR_DAS,
-    v0_max=DEFAULT_V0_MAX_FOR_DAS,
+    n_angles=_DEFAULT_N_ANGLES_FOR_DAS,
+    phi_offset=_DEFAULT_PHI_OFFSET,
+    n_v0=_DEFAULT_N_V0_FOR_DAS,
+    v0_min=_DEFAULT_V0_MIN_FOR_DAS,
+    v0_max=_DEFAULT_V0_MAX_FOR_DAS,
 ):
-    PLAYER_POS, BALL_POS, players, player_teams, controlling_teams, frame_to_idx = dangerous_accessible_space.get_matrix_coordinates(
+    PLAYER_POS, BALL_POS, players, player_teams, controlling_teams, frame_to_idx = get_matrix_coordinates(
         df_tracking, frame_col=tracking_frame_col, player_col=tracking_player_col,
         ball_player_id=ball_tracking_player_id, team_col=tracking_team_col, x_col=tracking_x_col, y_col=tracking_y_col,
         vx_col=tracking_vx_col, vy_col=tracking_vy_col,
@@ -359,11 +360,11 @@ def get_dangerous_accessible_space(
     phi_grid = np.tile(np.linspace(phi_offset, 2*np.pi+phi_offset, n_angles, endpoint=False), (F, 1))  # F x PHI
     v0_grid = np.tile(np.linspace(v0_min, v0_max, n_v0), (F, 1))  # F x V0
 
-    simulation_result = dangerous_accessible_space.simulate_passes_chunked(
+    simulation_result = simulate_passes_chunked(
         PLAYER_POS, BALL_POS, phi_grid, v0_grid, controlling_teams, player_teams, players, passers_to_exclude=None,
     )
     if apply_pitch_mask_to_raw_result:
-        simulation_result = dangerous_accessible_space.mask_out_of_play(simulation_result)
+        simulation_result = mask_out_of_play(simulation_result)
 
     # Add danger to simulation result
     if attacking_direction_col is not None:
@@ -381,8 +382,8 @@ def get_dangerous_accessible_space(
     simulation_result = simulation_result._replace(danger=DANGER)
 
     # Get AS and DAS
-    accessible_space = dangerous_accessible_space.aggregate_surface_area(simulation_result)  # F
-    das = dangerous_accessible_space.aggregate_surface_area(simulation_result, add_danger=True)  # F
+    accessible_space = aggregate_surface_area(simulation_result)  # F
+    das = aggregate_surface_area(simulation_result, add_danger=True)  # F
     fr2AS = pd.Series(accessible_space, index=df_tracking[tracking_frame_col].unique())
     fr2DAS = pd.Series(das, index=df_tracking[tracking_frame_col].unique())
     as_series = df_tracking[tracking_frame_col].map(fr2AS)
@@ -410,7 +411,63 @@ def infer_playing_direction(
         i_period = df_tracking[period_col] == period_id
         for team_id, direction in playing_direction[period_id].items():
             i_period_team_possession = i_period & (df_tracking[possession_team_col] == team_id)
-            # df_tracking.loc[i_period_team_possession, new_attacking_direction_col] = direction
             new_attacking_direction.loc[i_period_team_possession] = direction
 
     return new_attacking_direction
+
+
+def _adjust_saturation(color, saturation):
+    h, l, s = colorsys.rgb_to_hls(*color)
+    return colorsys.hls_to_rgb(h, l, saturation)
+
+
+def plot_expected_completion_surface(
+    das_simulation_result, frame_index, plot_type_off="poss", plot_type_def=None, color_off="blue", color_def="red",
+    plot_gridpoints=True
+):
+    x_grid = das_simulation_result.x_grid[frame_index, :, :]
+    y_grid = das_simulation_result.y_grid[frame_index, :, :]
+
+    x = np.ravel(x_grid)  # F*PHI*T
+    y = np.ravel(y_grid)  # F*PHI*T
+
+    for offdef, plot_type, color in [("off", plot_type_off, color_off), ("def", plot_type_def, color_def)]:
+        if plot_type is None:
+            continue
+        if offdef == "off":
+            if plot_type == "poss":
+                p = das_simulation_result.poss_density_att[frame_index, :, :]
+            elif plot_type == "prob":
+                p = das_simulation_result.prob_density_att[frame_index, :, :]
+            else:
+                raise ValueError(f"Unknown plot type: {plot_type}. Must be 'poss' or 'prob'.")
+        else:
+            if plot_type == "poss":
+                p = das_simulation_result.poss_density_def[frame_index, :, :]
+            elif plot_type == "prob":
+                p = das_simulation_result.prob_density_def[frame_index, :, :]
+            else:
+                raise ValueError(f"Unknown plot type: {plot_type}. Must be 'poss' or 'prob'.")
+
+        z = np.ravel(p)  # F*PHI*T
+
+        areas = 10
+        absolute_scale = False
+        if absolute_scale:
+            levels = np.linspace(start=0, stop=1.1, num=areas + 1, endpoint=True)
+        else:
+            levels = np.linspace(start=0, stop=np.max(z)+0.00001, num=areas + 1, endpoint=True)
+        saturations = [x / (areas) for x in range(areas)]
+        base_color = matplotlib.colors.to_rgb(color)
+
+        colors = [_adjust_saturation(base_color, s) for s in saturations]
+
+        # Create a triangulation
+        triang = matplotlib.tri.Triangulation(x, y)
+        cp = plt.tricontourf(x, y, z.T, colors=colors, alpha=0.1, cmap=None, levels=levels)  # Comment in to use [0, 1] scale
+        plt.tricontourf(triang, z.T, colors=colors, alpha=0.1, cmap=None, levels=levels)  # Comment in to use [0, 1] scale
+
+    if plot_gridpoints:
+        plt.plot(x, y, 'ko', ms=0.5)
+
+    return plt.gcf()
