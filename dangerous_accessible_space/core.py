@@ -41,15 +41,40 @@ _DEFAULT_USE_APPROX_TWO_POINT = False  # True
 _DEFAULT_INERTIAL_SECONDS = 0.6164609802178712
 _DEFAULT_RADIAL_GRIDSIZE = 3
 
+# PARAMETER_BOUNDS = {
+#     # Core simulation model
+#     "pass_start_location_offset": [-5, 5],
+#     "time_offset_ball": [-5, 5],
+#     "radial_gridsize": [4.99, 5.01],
+#     "b0": [-20, 15],
+#     "b1": [-200, 0],
+#     "player_velocity": [2, 35],
+#     "keep_inertial_velocity": [False, True],  # , False],
+#     "use_max": [False, True],
+#     "v_max": [5, 40],
+#     "a_max": [10, 45],
+#     "inertial_seconds": [0.0, 1.5],  # , True],
+#     "tol_distance": [0, 7],
+#     "use_approx_two_point": [False, True],
+#
+#     # xC
+#     "exclude_passer": [False, True],
+#     "use_poss": [False, True],  # , True],#, True],
+#     "use_fixed_v0": [False, True],
+#     "v0_min": [1, 14.999],
+#     "v0_max": [15, 45],
+#     "n_v0": [0.5, 6.5],
+# }
+
 PARAMETER_BOUNDS = {
     # Core simulation model
     "pass_start_location_offset": [-5, 5],
     "time_offset_ball": [-5, 5],
     "radial_gridsize": [4.99, 5.01],
     "b0": [-20, 15],
-    "b1": [-200, 0],
+    "b1": [-250, 0],
     "player_velocity": [2, 35],
-    "keep_inertial_velocity": [False, True],  # , False],
+    "keep_inertial_velocity": [True],  # , False],
     "use_max": [False, True],
     "v_max": [5, 40],
     "a_max": [10, 45],
@@ -58,13 +83,15 @@ PARAMETER_BOUNDS = {
     "use_approx_two_point": [False, True],
 
     # xC
-    "exclude_passer": [False, True],
+    "exclude_passer": [True],
     "use_poss": [False, True],  # , True],#, True],
     "use_fixed_v0": [False, True],
     "v0_min": [1, 14.999],
     "v0_max": [15, 45],
-    "n_v0": [0.5, 6.5],
+    "n_v0": [0.5, 7.5],
 }
+
+# zero_point_26_parameters = {"a_max":20.687696022742628,"b0":-4.973176437107297,"b1":-181.56501593117977,"exclude_passer":true,"inertial_seconds":1.4929680750845906,"keep_inertial_velocity":true,"n_v0":6.414838272011545,"pass_start_location_offset":-4.535588400888494,"player_velocity":7.714730029112021,"radial_gridsize":5.007483454653469,"time_offset_ball":-0.5893551474872902,"tol_distance":4.830843035068359,"use_approx_two_point":false,"use_fixed_v0":true,"use_max":false,"use_poss":true,"v0_max":20.118181464769954,"v0_min":8.942081484534505,"v_max":39.50504021152899}
 
 
 def _sigmoid(x):

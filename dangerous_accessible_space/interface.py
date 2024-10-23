@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import colorsys
 import matplotlib.pyplot as plt
 import matplotlib.tri
 import matplotlib.colors
@@ -9,7 +8,8 @@ from .assets import test_data
 from .core import _DEFAULT_PASS_START_LOCATION_OFFSET, _DEFAULT_B0, _DEFAULT_TIME_OFFSET_BALL, _DEFAULT_A_MAX, \
     _DEFAULT_USE_MAX, _DEFAULT_USE_APPROX_TWO_POINT, _DEFAULT_B1, _DEFAULT_PLAYER_VELOCITY, _DEFAULT_V_MAX, \
     _DEFAULT_KEEP_INERTIAL_VELOCITY, _DEFAULT_INERTIAL_SECONDS, _DEFAULT_TOL_DISTANCE, _DEFAULT_RADIAL_GRIDSIZE, \
-    simulate_passes_chunked, simulate_passes, mask_out_of_play, aggregate_surface_area
+    simulate_passes_chunked, mask_out_of_play, aggregate_surface_area
+from .utility import _get_unused_column_name, _dist_to_opp_goal, _opening_angle_to_goal, _adjust_saturation
 
 _DEFAULT_N_FRAMES_AFTER_PASS_FOR_V0 = 3
 _DEFAULT_FALLBACK_V0 = 10
@@ -115,15 +115,6 @@ def per_object_frameify_tracking_data(
     remaining_cols = [col for col in df_tracking.columns if col not in [frame_col] + all_coordinate_columns]
 
     return df_player.merge(df_tracking[[frame_col] + remaining_cols], on=frame_col, how="left")
-
-
-def _get_unused_column_name(df, prefix):
-    i = 1
-    new_column_name = prefix
-    while new_column_name in df.columns:
-        new_column_name = f"{prefix}_{i}"
-        i += 1
-    return new_column_name
 
 
 def get_pass_velocity(
@@ -249,7 +240,6 @@ def get_expected_pass_completion(
     # 4. Extract player team info
     passer_teams = df_passes[event_team_col].values  # F
     player_teams = np.array(player_teams)  # P
-    import streamlit as st
     if exclude_passer:
         passers_to_exclude = df_passes[event_player_col].values  # F
     else:
@@ -297,36 +287,8 @@ def get_expected_pass_completion(
     return xc, idx, simulation_result
 
 
-def _dist_to_opp_goal(x_norm, y_norm):
-    MAX_GOAL_POST_RADIUS = 0.06
-    SEMI_GOAL_WIDTH_INNER_EDGE = 7.32 / 2
-    SEMI_GOAL_WIDTH_CENTER = SEMI_GOAL_WIDTH_INNER_EDGE + MAX_GOAL_POST_RADIUS
-    def _distance(x, y, x_target, y_target):
-        return np.sqrt((x - x_target) ** 2 + (y - y_target) ** 2)
-    x_goal = 52.5
-    y_goal = np.clip(y_norm, -SEMI_GOAL_WIDTH_CENTER, SEMI_GOAL_WIDTH_CENTER)
-    return _distance(x_norm, y_norm, x_goal, y_goal)
-
-
-def _opening_angle_to_goal(x, y):
-    MAX_GOAL_POST_RADIUS = 0.06
-    SEMI_GOAL_WIDTH_INNER_EDGE = 7.32 / 2
-    SEMI_GOAL_WIDTH_CENTER = SEMI_GOAL_WIDTH_INNER_EDGE + MAX_GOAL_POST_RADIUS
-
-    def angle_between(u, v):
-        divisor = np.linalg.norm(u, axis=0) * np.linalg.norm(v, axis=0)
-        i_div_0 = divisor == 0
-        divisor[i_div_0] = np.inf  # Avoid division by zero by setting divisor to inf
-        dot_product = np.sum(u * v, axis=0)
-        cosTh1 = dot_product / divisor
-        angle = np.arccos(cosTh1)
-        return angle
-
-    x_goal = 52.5
-    return np.abs(angle_between(np.array([x_goal - x, SEMI_GOAL_WIDTH_CENTER - y]), np.array([x_goal - x, -SEMI_GOAL_WIDTH_CENTER - y])))
-
-
 def _get_danger(dist_to_goal, opening_angle):
+    """ Simple prefit xG model """
     coefficients = [-0.14447723, 0.40579492]
     intercept = -0.52156283
     logit = intercept + coefficients[0] * dist_to_goal + coefficients[1] * opening_angle
@@ -338,7 +300,8 @@ def get_dangerous_accessible_space(
     # Data
     df_tracking, tracking_frame_col="frame_id", tracking_player_col="player_id", tracking_team_col="team_id",
     ball_tracking_player_id="ball", tracking_x_col="x", tracking_y_col="y", tracking_vx_col="vx", tracking_vy_col="vy",
-    attacking_direction_col="attacking_direction",
+    attacking_direction_col="attacking_direction", period_col="period_id", possession_team_col="ball_possession",
+    infer_attacking_direction=False,
 
     # Options
     apply_pitch_mask_to_raw_result=False,
@@ -366,12 +329,20 @@ def get_dangerous_accessible_space(
     if apply_pitch_mask_to_raw_result:
         simulation_result = mask_out_of_play(simulation_result)
 
-    # Add danger to simulation result
+    ### Add danger to simulation result
+    # 1. Get attacking direction
+    if infer_attacking_direction:
+        attacking_direction_col = _get_unused_column_name(df_tracking, "attacking_direction")
+        df_tracking[attacking_direction_col] = infer_playing_direction(
+            df_tracking, team_col=tracking_team_col, period_col=period_col, possession_team_col=possession_team_col,
+            x_col=tracking_x_col
+        )
     if attacking_direction_col is not None:
         fr2playingdirection = df_tracking[[tracking_frame_col, attacking_direction_col]].set_index(tracking_frame_col).to_dict()[attacking_direction_col]
         ATTACKING_DIRECTION = np.array([fr2playingdirection[frame] for frame in frame_to_idx])  # F
     else:
-        ATTACKING_DIRECTION = np.ones(F)
+        ATTACKING_DIRECTION = np.ones(F)  # if no attacking direction is given, we assume always left-to-right
+    # 2. Calculate danger
     X = simulation_result.x_grid
     Y = simulation_result.y_grid
     X_NORM = X * ATTACKING_DIRECTION[:, np.newaxis, np.newaxis]
@@ -379,6 +350,7 @@ def get_dangerous_accessible_space(
     DIST_TO_GOAL = _dist_to_opp_goal(X_NORM, Y_NORM)
     OPENING_ANGLE = _opening_angle_to_goal(X_NORM, Y_NORM)
     DANGER = _get_danger(DIST_TO_GOAL, OPENING_ANGLE)
+    # 3. Add danger to simulation result
     simulation_result = simulation_result._replace(danger=DANGER)
 
     # Get AS and DAS
@@ -414,11 +386,6 @@ def infer_playing_direction(
             new_attacking_direction.loc[i_period_team_possession] = direction
 
     return new_attacking_direction
-
-
-def _adjust_saturation(color, saturation):
-    h, l, s = colorsys.rgb_to_hls(*color)
-    return colorsys.hls_to_rgb(h, l, saturation)
 
 
 def plot_expected_completion_surface(

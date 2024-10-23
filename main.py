@@ -9,8 +9,9 @@ import streamlit_profiler
 import tqdm
 import kloppy.metrica
 
-profiler = streamlit_profiler.Profiler()
-profiler.start()
+import dangerous_accessible_space.utility
+# profiler = streamlit_profiler.Profiler()
+# profiler.start()
 
 
 import databallpy.features
@@ -395,7 +396,7 @@ def validate_multiple_matches(
     dfs_test = []
     for dataset_nr, df_passes in enumerate(dfs_passes_with_synthetic):
         df_passes = df_passes.copy()
-        dataset_nr_col = dangerous_accessible_space.interface._get_unused_column_name(df_passes, "dataset_nr")
+        dataset_nr_col = dangerous_accessible_space.utility._get_unused_column_name(df_passes, "dataset_nr")
         df_passes[dataset_nr_col] = dataset_nr
         df_passes["stratification_var"] = df_passes[outcome_col].astype(str) + "_" + df_passes["is_synthetic"].astype(str)
 
@@ -472,6 +473,7 @@ def validate_multiple_matches(
     progress_bar = st.progress(0)
     display_df = st.empty()
     for i in tqdm.tqdm(range(n_steps), desc="Simulation", total=n_steps):
+        gc.collect()
         progress_bar_text.text(f"Simulation {i+1}/{n_steps}")
         progress_bar.progress((i+1) / n_steps)
         if use_prefit:
@@ -530,9 +532,13 @@ def validate_multiple_matches(
         df_to_display = pd.DataFrame(data).sort_values("logloss", ascending=True)
         df_to_display.iloc[1:, df_to_display.columns.get_loc("passes_json")] = np.nan
         df_to_display.iloc[1:, df_to_display.columns.get_loc("parameters")] = np.nan
-        display_df.write(df_to_display)
+        display_df.write(df_to_display.head(20))
 
         gc.collect()
+
+        # write size of "data" in GB
+        # import sys
+        # st.write("Size of 'data' in GB:", round(sum(sys.getsizeof(value) for value in data.values()) / 1024**3, 2))
 
         if use_prefit:
             break
@@ -552,6 +558,7 @@ def validate_multiple_matches(
 
     st.write("### Training results")
     st.write(bin_nr_calibration_plot(df_best_passes, outcome_col=outcome_col, n_bins=10))
+    st.write(bin_nr_calibration_plot(df_best_passes, outcome_col=outcome_col, n_bins=20))
 
     for (text, df) in [
         # ("Worst predictions", df_best_passes.sort_values("error", ascending=False)),
@@ -629,6 +636,7 @@ def validate_multiple_matches(
     st.write(df_simres_test)
 
     st.write(bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=10))
+    st.write(bin_nr_calibration_plot(df_simres_test, outcome_col=outcome_col, n_bins=20))
 
     # for n_bins in [5, 10, 20]:
     #     st.write(f"Calibration plot with {n_bins} bins")
@@ -1004,7 +1012,7 @@ def plot_pass(p4ss, df_tracking):
     # break
 
 
-def main():
+def validation_dashboard():
     st.write(f"Getting kloppy data...")
     dfs_tracking, dfs_event = get_kloppy_data()
 
@@ -1062,6 +1070,8 @@ def main():
     )
     return
 
+
+def demo_dashboard():
     match, df_tracking, df_event = _get_preprocessed_data()
 
     df_passes = df_event[df_event["databallpy_event"] == "pass"].reset_index()
@@ -1078,28 +1088,18 @@ def main():
         event_player_col="tracking_player_id",
     )
 
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-    st.write("-------")
-
     df_passes = df_passes.iloc[6:30]
 
     ### AS
+    st.write("df_tracking")
+    st.write(df_tracking.head(50))
     df_tracking = df_tracking[df_tracking["frame"].isin(df_passes["td_frame"])]
-    df_tracking["AS"], df_tracking["result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
-        df_tracking, tracking_frame_col="frame", tracking_player_col="player_id", tracking_team_col="team_id",
+    df_tracking["AS"], df_tracking["DAS"], df_tracking["result_index"], simulation_result = dangerous_accessible_space.get_dangerous_accessible_space(
+        df_tracking, infer_attacking_direction=True, tracking_frame_col="frame", tracking_player_col="player_id",
+        tracking_team_col="team_id",
     )
     df_passes["AS"] = df_passes["td_frame"].map(df_tracking.set_index("frame")["AS"].to_dict())
+    df_passes["DAS"] = df_passes["td_frame"].map(df_tracking.set_index("frame")["DAS"].to_dict())
     df_passes["result_index"] = df_passes["td_frame"].map(df_tracking.set_index("frame")["result_index"].to_dict())
 
     # df_passes = df_passes.sort_values("xc", ascending=True)
@@ -1113,7 +1113,7 @@ def main():
             team_colors=["blue", "red"],
             title=f"Pass completion: {row['outcome']}",
             add_velocities=True,
-            variable_of_interest=f"AS={row['AS']:.0f} m^2, xC={row['xc']:.1%}",
+            variable_of_interest=f"AS={row['AS']:.0f} m^2, xC={row['xc']:.1%}, DAS={row['DAS']:.2f} m^2",
             # variable_of_interest=f"AS={row['AS']:.0f} m^2",
             ax=ax,
         )
@@ -1125,9 +1125,10 @@ def main():
         )
 
         try:
-            fig = plot_expected_completion_surface(
-                simulation_result, row["result_index"], plot_type_off="poss", plot_type_def="poss", color_off=team_color,
-                color_def=def_team_color, plot_gridpoints=True
+            fig = dangerous_accessible_space.plot_expected_completion_surface(
+                simulation_result, row["result_index"], plot_type_off="poss",
+                # plot_type_def="poss",
+                color_off=team_color, color_def=def_team_color, plot_gridpoints=True
             )
         except NameError as e:
             pass
@@ -1140,8 +1141,8 @@ def main():
 
     st.write(fig)
 
-    profiler.stop()
+    # profiler.stop()
 
 
 if __name__ == '__main__':
-    main()
+    demo_dashboard()
